@@ -48,14 +48,17 @@ SUIT_NAMES = {"h": "Hearts", "d": "Diamonds", "s": "Spades", "c": "Clubs"}
 
 def _rank_from_text(text: str) -> str:
     """Normalize OCR text and return a valid single-char rank or '?' if unknown."""
-    text = text.strip().upper().replace("O", "0").replace("l", "1").replace("I", "1")
+    text = "".join(ch for ch in text.strip().upper() if ch.isalnum())
+    text = text.replace("O", "0").replace("l", "1").replace("I", "1")
     text = RANKS.get(text, text)
 
     valid = {"2","3","4","5","6","7","8","9","T","J","Q","K","A","10"}
 
-    for token in [text[:2], text[:1]]:
-        if token in valid:
-            return "T" if token == "10" else token
+    # Accept only clean single-rank outputs, not noisy mixed strings like "J4A".
+    if text in valid:
+        return "T" if text == "10" else text
+    if len(text) == 1 and text in valid:
+        return text
 
     # Common artifact: rank + extra leading '1' from neighboring glyph (e.g. '17').
     if len(text) >= 2 and text[0] == "1" and text[1] in {"2","3","4","5","6","7","8","9","T","J","Q","K","A"}:
@@ -339,53 +342,34 @@ def _detect_rank(card_img: np.ndarray) -> str:
 # ---------------------------------------------------------------------------
 
 def _detect_suit(card_img: np.ndarray) -> str:
-    """Detect suit from theme color in the top-left rank/symbol area.
+    """Detect suit by dominant color range across the whole card.
 
-    Mapping for this theme:
-      - green -> clubs (c)
-      - blue  -> diamonds (d)
-      - red   -> hearts (h)
-      - black/dark -> spades (s)
+    Theme mapping:
+      red   (H 0-12 or 163-180, S>50, V>50)  -> hearts  (h)
+      green (H 35-95,            S>50, V>50)  -> clubs   (c)
+      blue  (H 96-145,           S>50, V>50)  -> diamonds (d)
+      no strong color                          -> spades  (s)
+
+    Spades have no saturated color pixels; the table dark background
+    pollutes any "black pixel" count, so spades is the default fallback.
     """
-    suit_crop = _crop_rel(
-        card_img,
-        SUIT_COLOR_ROI["x_start"], SUIT_COLOR_ROI["x_end"],
-        SUIT_COLOR_ROI["y_start"], SUIT_COLOR_ROI["y_end"],
-    )
-    if suit_crop.size == 0:
+    if card_img.size == 0:
         return "s"
 
-    hsv = cv2.cvtColor(suit_crop, cv2.COLOR_BGR2HSV)
-    h = hsv[:, :, 0]
-    s = hsv[:, :, 1]
-    v = hsv[:, :, 2]
+    hsv = cv2.cvtColor(card_img, cv2.COLOR_BGR2HSV)
+    h, s, v = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
 
-    # Ignore near-white background.
-    color_mask = (s > 55) & (v > 45)
-    dark_mask = (v < 75) & (s < 70)
+    red_count   = int(np.count_nonzero(((h <= 12) | (h >= 163)) & (s > 50) & (v > 50)))
+    green_count = int(np.count_nonzero((h >= 35)  & (h <= 95)   & (s > 50) & (v > 50)))
+    blue_count  = int(np.count_nonzero((h >= 96)  & (h <= 145)  & (s > 50) & (v > 50)))
 
-    total = suit_crop.shape[0] * suit_crop.shape[1]
-    color_pixels = int(np.count_nonzero(color_mask))
-    dark_pixels = int(np.count_nonzero(dark_mask))
+    best = max([("h", red_count), ("c", green_count), ("d", blue_count)], key=lambda t: t[1])
 
-    if color_pixels < max(12, total // 80) and dark_pixels > total // 25:
-        return "s"
-
-    if color_pixels == 0:
-        return "s"
-
-    red_count = int(np.count_nonzero((((h <= 10) | (h >= 165)) & color_mask)))
-    green_count = int(np.count_nonzero(((h >= 35) & (h <= 95) & color_mask)))
-    blue_count = int(np.count_nonzero(((h >= 95) & (h <= 140) & color_mask)))
-
-    best = max(
-        [("h", red_count), ("c", green_count), ("d", blue_count)],
-        key=lambda t: t[1],
-    )
-
-    if best[1] == 0:
-        return "s"
-    return best[0]
+    # Only accept a colored suit if the signal is strong enough.
+    # Spades have no saturated color → fall back when nothing clears the bar.
+    if best[1] >= 2000:
+        return best[0]
+    return "s"
 
 
 # ---------------------------------------------------------------------------
