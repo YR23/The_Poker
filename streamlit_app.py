@@ -1,64 +1,56 @@
-import subprocess
-from datetime import datetime
-from pathlib import Path
-
-import cv2
 import streamlit as st
 
-from detector.card_reader import read_hole_cards
-
-TEMP_IMAGE_PATH = Path("/tmp/temp.png")
+from detector.ranges import get_action, VALID_POSITIONS
 
 
-def capture_screen_to(path: Path) -> tuple[bool, str]:
-    """Capture the full screen to the given path using macOS screencapture."""
-    try:
-        subprocess.run(["screencapture", "-x", str(path)], check=True)
-        return True, ""
-    except (OSError, subprocess.CalledProcessError) as exc:
-        return False, str(exc)
+RANK_OPTIONS = ["A", "K", "Q", "J", "T", "9", "8", "7", "6", "5", "4", "3", "2"]
+RANK_ORDER = "23456789TJQKA"
 
 
-def load_bgr_image(path: Path):
-    img = cv2.imread(str(path))
-    if img is None:
-        return None
-    return img
+def _sorted_ranks(rank1: str, rank2: str) -> tuple[str, str]:
+    if RANK_ORDER.index(rank1) >= RANK_ORDER.index(rank2):
+        return rank1, rank2
+    return rank2, rank1
+
+
+def build_hand_notation(rank1: str, rank2: str, hand_type: str) -> str:
+    r1, r2 = _sorted_ranks(rank1, rank2)
+
+    if r1 == r2:
+        return f"{r1}{r2}"
+
+    if hand_type == "Suited":
+        return f"{r1}{r2}s"
+
+    return f"{r1}{r2}o"
 
 
 def main() -> None:
-    st.set_page_config(page_title="Poker Card Detector", layout="centered")
-    st.title("Poker Card Detector")
-    st.write("Capture your screen and detect your two hole cards.")
+    st.set_page_config(page_title="Poker Preflop Advisor", layout="centered")
+    st.title("Poker Preflop Advisor")
+    st.write("Choose your two hole-card ranks, suited or offsuit, and your position.")
 
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        capture_clicked = st.button("Capture And Detect", type="primary", use_container_width=True)
-    with col2:
-        keep_last = st.checkbox("Keep last screenshot", value=True)
+    c1, c2 = st.columns(2)
+    with c1:
+        rank1 = st.selectbox("Card 1 rank", options=RANK_OPTIONS, index=0)
+    with c2:
+        rank2 = st.selectbox("Card 2 rank", options=RANK_OPTIONS, index=1)
 
-    if capture_clicked:
-        ok, err = capture_screen_to(TEMP_IMAGE_PATH)
-        if not ok:
-            st.error(f"Capture failed: {err}")
-            return
+    if rank1 == rank2:
+        st.info("Pocket pair selected. Suited or offsuit is ignored.")
+        hand_type = "Pair"
+    else:
+        hand_type = st.radio("Hand type", options=["Suited", "Offsuit"], horizontal=True)
 
-        img_bgr = load_bgr_image(TEMP_IMAGE_PATH)
-        if img_bgr is None:
-            st.error(f"Could not read image: {TEMP_IMAGE_PATH}")
-            return
+    position = st.selectbox("Position", options=VALID_POSITIONS, index=VALID_POSITIONS.index("SB"))
 
-        card1, card2 = read_hole_cards(img_bgr)
-        st.success(f"Detected cards: {card1}  {card2}")
+    hand = build_hand_notation(rank1, rank2, hand_type)
+    action = get_action(position, hand)
 
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        st.caption(f"Captured at {timestamp} from {TEMP_IMAGE_PATH}")
-
-        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-        st.image(img_rgb, caption="Captured screen", use_container_width=True)
-
-        if not keep_last and TEMP_IMAGE_PATH.exists():
-            TEMP_IMAGE_PATH.unlink(missing_ok=True)
+    st.subheader("Result")
+    st.write(f"Hand: {hand}")
+    st.write(f"Position: {position}")
+    st.success(f"Action: {action}")
 
 
 if __name__ == "__main__":
