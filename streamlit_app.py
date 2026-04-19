@@ -1,5 +1,6 @@
 import streamlit as st
 from open_raise_section import render_open_raise_expander
+from defend_three_bet_section import render_defend_three_bet_expander
 from three_bet_section import render_three_bet_expander
 
 
@@ -15,8 +16,11 @@ def main() -> None:
     )
     st.session_state["hand_input"] = hand_input
 
+    st.subheader("Pre-flop")
+
     render_open_raise_expander(hand_input)
     render_three_bet_expander(hand_input)
+    render_defend_three_bet_expander()
 
 
 if __name__ == "__main__":
