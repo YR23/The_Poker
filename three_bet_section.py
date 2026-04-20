@@ -1,9 +1,12 @@
+from pathlib import Path
+
 import streamlit as st
 
 from open_raise_section import normalize_hand
 
 
 POSITIONS = ["UTG", "MP", "CO", "BTN", "SB"]
+THREE_BET_IMAGE_PATH = Path("DCIM/3-bet/ranges.png")
 
 
 def _build_three_bet_defaults() -> dict[str, set[str]]:
@@ -49,6 +52,11 @@ THREE_BET_BLUFFS = {
 def render_three_bet_expander(hand_input: str) -> None:
     with st.expander("3-bet", expanded=False):
         st.write("Choose villain open-raise position. Returns 3-bet value or 3-bet bluff.")
+
+        if THREE_BET_IMAGE_PATH.exists():
+            st.image(str(THREE_BET_IMAGE_PATH), caption="3-bet ranges chart", use_container_width=True)
+        else:
+            st.info("Add DCIM/3-bet/ranges.png to display the 3-bet ranges chart here.")
 
         row_columns = st.columns(len(POSITIONS))
         for idx, position in enumerate(POSITIONS):

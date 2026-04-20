@@ -6,11 +6,11 @@ import streamlit as st
 
 
 POSITION_IMAGES = {
-    "UTG": "DCIM/UTG.png",
-    "MP": "DCIM/MP.png",
-    "CO": "DCIM/CO.png",
-    "BTN": "DCIM/BTN.png",
-    "SB": "DCIM/SB.png",
+    "UTG": "DCIM/open-raise/UTG.png",
+    "MP": "DCIM/open-raise/MP.png",
+    "CO": "DCIM/open-raise/CO.png",
+    "BTN": "DCIM/open-raise/BTN.png",
+    "SB": "DCIM/open-raise/SB.png",
 }
 
 RANKS = "AKQJT98765432"

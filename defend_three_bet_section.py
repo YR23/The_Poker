@@ -22,45 +22,45 @@ def render_defend_three_bet_expander() -> None:
     with st.expander("Defending a 3-bet", expanded=False):
         st.write("Enter villain 3-bet percentage to evaluate polarization.")
 
-        default_value = st.session_state.get("villain_three_bet_percent", 3.0)
+        default_value = int(st.session_state.get("villain_three_bet_percent", 3))
         three_bet_percent = st.number_input(
             "Villain 3-bet %",
-            min_value=0.0,
-            max_value=100.0,
-            value=float(default_value),
-            step=0.1,
-            format="%.1f",
+            min_value=0,
+            max_value=100,
+            value=default_value,
+            step=1,
+            format="%d",
             key="villain_three_bet_percent",
         )
 
         classification, explanation = _classify_three_bet_range(three_bet_percent)
 
         if classification == "DEPOLARIZED":
-            st.success(f"{three_bet_percent:.1f}% -> {classification}")
+            st.success(f"{three_bet_percent}% -> {classification}")
             st.image(
-                "DCIM/depolarized.png",
+                "DCIM/defence_3_bet/depolarized.png",
                 caption="Most likely depolarized 3-bet range",
                 use_container_width=True,
             )
         elif classification == "POLARIZED":
-            st.warning(f"{three_bet_percent:.1f}% -> {classification}")
+            st.warning(f"{three_bet_percent}% -> {classification}")
             st.image(
-                "DCIM/polarized.png",
+                "DCIM/defence_3_bet/polarized.png",
                 caption="Most likely polarized 3-bet range",
                 use_container_width=True,
             )
         else:
-            st.info(f"{three_bet_percent:.1f}% -> {classification}")
+            st.info(f"{three_bet_percent}% -> {classification}")
             comparison_col1, comparison_col2 = st.columns(2)
             with comparison_col1:
                 st.image(
-                    "DCIM/depolarized.png",
+                    "DCIM/defence_3_bet/depolarized.png",
                     caption="Depolarized reference",
                     use_container_width=True,
                 )
             with comparison_col2:
                 st.image(
-                    "DCIM/polarized.png",
+                    "DCIM/defence_3_bet/polarized.png",
                     caption="Polarized reference",
                     use_container_width=True,
                 )
