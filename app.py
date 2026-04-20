@@ -34,6 +34,20 @@ RFI_CONFIGS_DIR = Path("configs/positions")
 SET_MINING_HANDS = {"22", "33", "44", "55", "66", "77", "88", "99"}
 STEAL_POSITIONS = {"CO", "BTN", "SB"}
 
+# Maps play name -> PNG path (None = no chart, or uses position for RFI)
+PLAY_PNG_MAP: Dict[str, Optional[Path]] = {
+    "Raising First In": None,  # position-specific: DCIM/open-raise/{position}.png
+    "3-Bet": Path("DCIM/3-bet/ranges.png"),
+    "4-Bet": Path("DCIM/3-bet/ranges.png"),
+    "Cold Call": None,
+    "Set Mining": None,
+    "Isolation Raise": Path("DCIM/iso_raising/ranges.png"),
+    "Overcall": Path("DCIM/over_calling/ranges.png"),
+    "Squeeze": Path("DCIM/squeezing/ranges.png"),
+    "Steal": None,
+    "Defending the Blinds": Path("DCIM/defence_steal/defence.png"),
+}
+
 
 def _init_state() -> None:
     if "selected_by_row" not in st.session_state:
@@ -74,7 +88,10 @@ def _evaluate_play(play_name: str, hand: str, position: str) -> Tuple[Optional[b
         return is_possible, "In 3-bet value/bluff range." if is_possible else "Not in 3-bet value/bluff range."
 
     if play_name == "4-Bet":
-        return None, "Range not defined in current project."
+        if position not in THREE_BET_DEFAULTS:
+            return None, f"No 4-bet chart configured for {position}."
+        is_possible = hand in THREE_BET_DEFAULTS[position] or hand in THREE_BET_BLUFFS
+        return is_possible, "In 4-bet value/bluff range." if is_possible else "Not in 4-bet value/bluff range."
 
     if play_name == "Cold Call":
         if position not in COLD_CALL_CHARTS:
@@ -90,9 +107,6 @@ def _evaluate_play(play_name: str, hand: str, position: str) -> Tuple[Optional[b
     if play_name == "Isolation Raise":
         is_possible = hand in DEFAULT_ISO_RAISE_HANDS
         return is_possible, "In iso-raise range." if is_possible else "Not in iso-raise range."
-
-    if play_name == "Limp":
-        return None, "Range not defined in current project."
 
     if play_name == "Overcall":
         is_possible = hand in OVER_CALL_HANDS
@@ -195,7 +209,6 @@ def _render_plays_matrix(hand: Optional[str], position: str) -> None:
 
                 with st.expander(expander_title, expanded=False):
                     st.write(play["description"])
-
                     st.caption(reason)
 
 
@@ -285,12 +298,16 @@ if hand_notation is None or not selected_position:
 else:
     st.success(hand_notation)
 
+st.divider()
+st.subheader("The Pre Flop Session")
+st.divider()
+_render_plays_matrix(hand_notation, selected_position)
+
+if hand_notation is not None and selected_position:
+    st.divider()
     plot_path = CM_PLOTS_DIR / f"{hand_notation}.html"
     if plot_path.exists():
         plot_html = plot_path.read_text(encoding="utf-8")
         components.html(plot_html, height=700, scrolling=True)
     else:
         st.info(f"Plot file not found for {hand_notation}.")
-
-st.divider()
-_render_plays_matrix(hand_notation, selected_position)

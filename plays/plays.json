@@ -30,11 +30,6 @@
     "description": "This is when someone limps and you raise to play against them alone. The goal is to get heads-up with a weaker player."
   },
   {
-    "name": "Limp",
-    "other_names": ["Flat entry"],
-    "description": "This is when you just call the big blind instead of raising. You enter the pot cheaply without showing strength."
-  },
-  {
     "name": "Overcall",
     "other_names": ["Call behind"],
     "description": "This is when one player raises, another calls, and you also call. You join the pot without raising after multiple players are already in."
