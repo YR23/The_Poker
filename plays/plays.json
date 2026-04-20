@@ -1,0 +1,57 @@
+[
+  {
+    "name": "Raising First In",
+    "other_names": ["Open raise", "Open"],
+    "description": "This is when no one has entered the pot before you and you decide to raise. You are the first player to put in more than the big blind."
+  },
+  {
+    "name": "3-Bet",
+    "other_names": ["Re-raise"],
+    "description": "This is when a player raises and you raise again after them. It shows strength or can be used to push them out of the pot."
+  },
+  {
+    "name": "4-Bet",
+    "other_names": ["Second re-raise"],
+    "description": "This happens when there is a raise, a 3-bet, and then you raise again. It usually means very strong hands or a big bluff."
+  },
+  {
+    "name": "Cold Call",
+    "other_names": ["Flat call"],
+    "description": "This is when a player has already raised and you just call without raising. You enter the pot without increasing the bet."
+  },
+  {
+    "name": "Set Mining",
+    "other_names": ["Pocket pair mining"],
+    "description": "This is when you call with a small pocket pair hoping to hit three of a kind on the flop. You usually do this when stacks are deep enough to win a big pot."
+  },
+  {
+    "name": "Isolation Raise",
+    "other_names": ["Iso-raise"],
+    "description": "This is when someone limps and you raise to play against them alone. The goal is to get heads-up with a weaker player."
+  },
+  {
+    "name": "Limp",
+    "other_names": ["Flat entry"],
+    "description": "This is when you just call the big blind instead of raising. You enter the pot cheaply without showing strength."
+  },
+  {
+    "name": "Overcall",
+    "other_names": ["Call behind"],
+    "description": "This is when one player raises, another calls, and you also call. You join the pot without raising after multiple players are already in."
+  },
+  {
+    "name": "Squeeze",
+    "other_names": ["Squeeze play"],
+    "description": "This is when there is a raise and one or more callers, and you make a big re-raise. The goal is to force everyone to fold and win the pot immediately."
+  },
+  {
+    "name": "Steal",
+    "other_names": ["Blind steal"],
+    "description": "This is when you raise from a late position to try to win the blinds. You are taking advantage of players who have not entered the pot."
+  },
+  {
+    "name": "Defending the Blinds",
+    "other_names": ["Blind defense"],
+    "description": "This is when you are in the big blind or small blind and decide to call or raise against a steal. You protect your blind from being taken too easily."
+  }
+]
