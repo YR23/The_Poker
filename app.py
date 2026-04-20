@@ -12,7 +12,7 @@ from squeeze_section import SQUEEZE_RANGES
 from three_bet_section import THREE_BET_BLUFFS, THREE_BET_DEFAULTS
 
 
-st.set_page_config(page_title="Empty Streamlit App", layout="wide")
+st.set_page_config(page_title="YR Poker", page_icon="♦️", layout="wide")
 
 
 CARD_ORDER = ["2", "3", "4", "5", "6", "7", "8", "9", "T", "J", "Q", "K", "A"]
