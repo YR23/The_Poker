@@ -60,6 +60,51 @@ def _init_state() -> None:
         st.session_state["selected_by_row"] = {}
     if "selected_position" not in st.session_state:
         st.session_state["selected_position"] = ""
+    if "players" not in st.session_state:
+        st.session_state["players"] = []
+    # Keep Pyrex present as a default player profile.
+    if not any(str(player.get("Name", "")).strip().lower() == "pyrex" for player in st.session_state["players"]):
+        st.session_state["players"].append(
+            {
+                "Name": "Pyrex",
+                "VPIP": 0,
+                "PFR": 0,
+                "3-BET": 0,
+                "Fold to 3-Bet": 0,
+                "C-BET": 0,
+                "Fold to C-Bet": 0,
+                "Steal": 0,
+                "Check/Raise": 0,
+                "Pre Flop Action": "",
+                "Position": POSITIONS[0],
+            }
+        )
+    if "editing_player_index" not in st.session_state:
+        st.session_state["editing_player_index"] = None
+    if "pending_edit_player_index" not in st.session_state:
+        st.session_state["pending_edit_player_index"] = None
+    if "player_name_input" not in st.session_state:
+        st.session_state["player_name_input"] = ""
+    if "player_vpip_input" not in st.session_state:
+        st.session_state["player_vpip_input"] = 0
+    if "player_pfr_input" not in st.session_state:
+        st.session_state["player_pfr_input"] = 0
+    if "player_three_bet_input" not in st.session_state:
+        st.session_state["player_three_bet_input"] = 0
+    if "player_fold_to_three_bet_input" not in st.session_state:
+        st.session_state["player_fold_to_three_bet_input"] = 0
+    if "player_cbet_input" not in st.session_state:
+        st.session_state["player_cbet_input"] = 0
+    if "player_fold_to_cbet_input" not in st.session_state:
+        st.session_state["player_fold_to_cbet_input"] = 0
+    if "player_steal_input" not in st.session_state:
+        st.session_state["player_steal_input"] = 0
+    if "player_check_raise_input" not in st.session_state:
+        st.session_state["player_check_raise_input"] = 0
+    if "pending_player_form_reset" not in st.session_state:
+        st.session_state["pending_player_form_reset"] = False
+    if "player_flash_message" not in st.session_state:
+        st.session_state["player_flash_message"] = ""
 
 
 @st.cache_data
@@ -218,6 +263,70 @@ def _render_plays_matrix(hand: Optional[str], position: str) -> None:
                     st.caption(reason)
 
 
+def _render_pre_flop_players_actions() -> None:
+    players = st.session_state["players"]
+
+    if not players:
+        st.caption("Add a player below to manage pre-flop actions here.")
+        return
+
+    position_rank = {pos: i for i, pos in enumerate(POSITIONS)}
+    ordered_indices = sorted(
+        range(len(players)),
+        key=lambda i: (
+            position_rank.get(players[i].get("Position", POSITIONS[0]), len(POSITIONS)),
+            str(players[i].get("Name", "")).lower(),
+        ),
+    )
+
+    player_cols = st.columns(len(players), gap="small")
+    for col_idx, idx in enumerate(ordered_indices):
+        player = players[idx]
+        with player_cols[col_idx]:
+            current_action = player.get("Pre Flop Action", "")
+            st.markdown(f"<p style='text-align:center; font-weight:600;'>{player['Name']}</p>", unsafe_allow_html=True)
+
+            if st.button(
+                "🔴 Fold",
+                key=f"preflop_action_fold_{idx}",
+                use_container_width=True,
+                type="primary" if current_action == "Fold" else "secondary",
+            ):
+                players[idx]["Pre Flop Action"] = "Fold"
+                st.rerun()
+
+            if st.button(
+                "🔵 Call",
+                key=f"preflop_action_call_{idx}",
+                use_container_width=True,
+                type="primary" if current_action == "Call" else "secondary",
+            ):
+                players[idx]["Pre Flop Action"] = "Call"
+                st.rerun()
+
+            if st.button(
+                "🟢 Raise",
+                key=f"preflop_action_raise_{idx}",
+                use_container_width=True,
+                type="primary" if current_action == "Raise" else "secondary",
+            ):
+                players[idx]["Pre Flop Action"] = "Raise"
+                st.rerun()
+
+            current_position = player.get("Position", POSITIONS[0])
+            if current_position not in POSITIONS:
+                current_position = POSITIONS[0]
+            selected_position = st.selectbox(
+                "Position",
+                POSITIONS,
+                index=POSITIONS.index(current_position),
+                key=f"preflop_player_position_{idx}",
+            )
+            if selected_position != current_position:
+                players[idx]["Position"] = selected_position
+                st.rerun()
+
+
 def _build_hand_notation() -> Optional[str]:
     selected = st.session_state.get("selected_by_row", {})
     card_1 = selected.get(1)
@@ -278,6 +387,142 @@ def _position_picker() -> None:
                 st.rerun()
 
 
+def _render_players_section() -> None:
+    def _reset_player_form() -> None:
+        st.session_state["editing_player_index"] = None
+        st.session_state["pending_edit_player_index"] = None
+        st.session_state["pending_player_form_reset"] = False
+        st.session_state["player_name_input"] = ""
+        st.session_state["player_vpip_input"] = 0
+        st.session_state["player_pfr_input"] = 0
+        st.session_state["player_three_bet_input"] = 0
+        st.session_state["player_fold_to_three_bet_input"] = 0
+        st.session_state["player_cbet_input"] = 0
+        st.session_state["player_fold_to_cbet_input"] = 0
+        st.session_state["player_steal_input"] = 0
+        st.session_state["player_check_raise_input"] = 0
+
+    players = st.session_state["players"]
+
+    if st.session_state.get("pending_player_form_reset"):
+        _reset_player_form()
+
+    flash_message = st.session_state.get("player_flash_message", "")
+    if flash_message:
+        st.success(flash_message)
+        st.session_state["player_flash_message"] = ""
+
+    pending_idx = st.session_state.get("pending_edit_player_index")
+    if isinstance(pending_idx, int) and 0 <= pending_idx < len(players):
+        player = players[pending_idx]
+        st.session_state["editing_player_index"] = pending_idx
+        st.session_state["player_name_input"] = player["Name"]
+        st.session_state["player_vpip_input"] = int(player["VPIP"])
+        st.session_state["player_pfr_input"] = int(player["PFR"])
+        st.session_state["player_three_bet_input"] = int(player["3-BET"])
+        st.session_state["player_fold_to_three_bet_input"] = int(player["Fold to 3-Bet"])
+        st.session_state["player_cbet_input"] = int(player["C-BET"])
+        st.session_state["player_fold_to_cbet_input"] = int(player["Fold to C-Bet"])
+        st.session_state["player_steal_input"] = int(player["Steal"])
+        st.session_state["player_check_raise_input"] = int(player["Check/Raise"])
+        st.session_state["pending_edit_player_index"] = None
+
+    editing_index = st.session_state["editing_player_index"]
+    is_editing = isinstance(editing_index, int) and 0 <= editing_index < len(players)
+
+    st.subheader("Edit Player" if is_editing else "Add Player")
+
+    with st.form("add_player_form", clear_on_submit=False):
+        name = st.text_input("Player Name", key="player_name_input")
+
+        cols_row_1 = st.columns(4, gap="small")
+        with cols_row_1[0]:
+            vpip = st.number_input("VPIP (%)", min_value=0, max_value=100, step=1, format="%d", key="player_vpip_input")
+        with cols_row_1[1]:
+            pfr = st.number_input("PFR (%)", min_value=0, max_value=100, step=1, format="%d", key="player_pfr_input")
+        with cols_row_1[2]:
+            three_bet = st.number_input("3-BET (%)", min_value=0, max_value=100, step=1, format="%d", key="player_three_bet_input")
+        with cols_row_1[3]:
+            fold_to_three_bet = st.number_input("Fold to 3-Bet (%)", min_value=0, max_value=100, step=1, format="%d", key="player_fold_to_three_bet_input")
+
+        cols_row_2 = st.columns(4, gap="small")
+        with cols_row_2[0]:
+            cbet = st.number_input("C-BET (%)", min_value=0, max_value=100, step=1, format="%d", key="player_cbet_input")
+        with cols_row_2[1]:
+            fold_to_cbet = st.number_input("Fold to C-Bet (%)", min_value=0, max_value=100, step=1, format="%d", key="player_fold_to_cbet_input")
+        with cols_row_2[2]:
+            steal = st.number_input("Steal (%)", min_value=0, max_value=100, step=1, format="%d", key="player_steal_input")
+        with cols_row_2[3]:
+            check_raise = st.number_input("Check/Raise (%)", min_value=0, max_value=100, step=1, format="%d", key="player_check_raise_input")
+
+        action_col, cancel_col = st.columns(2, gap="small")
+        with action_col:
+            submitted = st.form_submit_button("Update Player" if is_editing else "Add Player", use_container_width=True)
+        with cancel_col:
+            canceled = st.form_submit_button("Cancel Edit", use_container_width=True, disabled=not is_editing)
+
+    if canceled:
+        st.session_state["pending_player_form_reset"] = True
+        st.rerun()
+
+    if submitted:
+        clean_name = name.strip()
+        if not clean_name:
+            st.warning("Enter a player name before saving.")
+        else:
+            payload = {
+                "Name": clean_name,
+                "VPIP": int(vpip),
+                "PFR": int(pfr),
+                "3-BET": int(three_bet),
+                "Fold to 3-Bet": int(fold_to_three_bet),
+                "C-BET": int(cbet),
+                "Fold to C-Bet": int(fold_to_cbet),
+                "Steal": int(steal),
+                "Check/Raise": int(check_raise),
+            }
+
+            if is_editing:
+                payload["Pre Flop Action"] = players[editing_index].get("Pre Flop Action", "")
+                payload["Position"] = players[editing_index].get("Position", POSITIONS[0])
+                players[editing_index] = payload
+                st.session_state["player_flash_message"] = f"Updated {clean_name}."
+            else:
+                payload["Pre Flop Action"] = ""
+                payload["Position"] = POSITIONS[0]
+                players.append(payload)
+                st.session_state["player_flash_message"] = f"Added {clean_name}."
+
+            st.session_state["pending_player_form_reset"] = True
+            st.rerun()
+
+    if players:
+        st.markdown("Saved Players")
+        for idx, player in enumerate(players):
+            player_cols = st.columns([5, 1, 1], gap="small")
+            summary = (
+                f"{player['Name']} | VPIP {player['VPIP']}% | PFR {player['PFR']}% | "
+                f"3-BET {player['3-BET']}% | Fold to 3-Bet {player['Fold to 3-Bet']}% | "
+                f"C-BET {player['C-BET']}% | Fold to C-Bet {player['Fold to C-Bet']}% | "
+                f"Steal {player['Steal']}% | Check/Raise {player['Check/Raise']}% | "
+                f"Position {player.get('Position', '-') or '-'} | Action {player.get('Pre Flop Action', '-') or '-'}"
+            )
+            with player_cols[0]:
+                st.write(summary)
+            with player_cols[1]:
+                if st.button("Edit", key=f"edit_player_{idx}", use_container_width=True):
+                    st.session_state["pending_edit_player_index"] = idx
+                    st.rerun()
+            with player_cols[2]:
+                if st.button("Delete", key=f"delete_player_{idx}", use_container_width=True):
+                    players.pop(idx)
+                    if st.session_state["editing_player_index"] == idx:
+                        st.session_state["pending_player_form_reset"] = True
+                    elif isinstance(st.session_state["editing_player_index"], int) and st.session_state["editing_player_index"] > idx:
+                        st.session_state["editing_player_index"] -= 1
+                    st.rerun()
+
+
 _init_state()
 
 
@@ -307,6 +552,7 @@ else:
 
 st.divider()
 st.subheader("The Pre Flop Session")
+_render_pre_flop_players_actions()
 st.divider()
 _render_plays_matrix(hand_notation, selected_position)
 
@@ -318,3 +564,6 @@ if hand_notation is not None and selected_position:
         components.html(plot_html, height=700, scrolling=True)
     else:
         st.info(f"Plot file not found for {hand_notation}.")
+
+st.divider()
+_render_players_section()
