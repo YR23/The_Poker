@@ -378,6 +378,13 @@ def _rotate_players_positions_next_hand() -> None:
         player["Position"] = next_position.get(current, "UTG")
 
 
+def _start_next_hand() -> None:
+    _rotate_players_positions_next_hand()
+    st.session_state["selected_by_row"] = {}
+    for player in st.session_state["players"]:
+        player["Pre Flop Action"] = ""
+
+
 def _get_pyrex_position() -> str:
     for player in st.session_state["players"]:
         if str(player.get("Name", "")).strip().lower() == "pyrex":
@@ -564,7 +571,7 @@ _init_state()
 
 
 if st.button("Next Hand", key="next_hand_btn", use_container_width=False):
-    _rotate_players_positions_next_hand()
+    _start_next_hand()
     st.rerun()
 
 
