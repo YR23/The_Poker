@@ -17,6 +17,12 @@ st.set_page_config(page_title="YR Poker", page_icon="♦️", layout="wide")
 
 CARD_ORDER = ["2", "3", "4", "5", "6", "7", "8", "9", "T", "J", "Q", "K", "A"]
 COLOR_ORDER = ["black", "red", "blue", "green"]
+COLOR_BUTTON_EMOJI = {
+    "black": "⚫",
+    "red": "🔴",
+    "blue": "🔵",
+    "green": "🟢",
+}
 POSITIONS = ["UTG", "MP", "CO", "BTN", "SB", "BB"]
 POSITION_DISTANCE_FROM_BUTTON = {
     "UTG": -3,
@@ -241,8 +247,9 @@ def _row_picker(row_id: int, names: list[str]) -> None:
     for idx, name in enumerate(names):
         with cols[idx]:
             button_type = "primary" if name == selected_name else "secondary"
+            label = f"{COLOR_BUTTON_EMOJI[name]} {name.title()}" if name in COLOR_BUTTON_EMOJI else name
             if st.button(
-                name,
+                label,
                 key=f"row_{row_id}_item_{name}",
                 use_container_width=True,
                 type=button_type,
