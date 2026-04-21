@@ -279,6 +279,16 @@ def _render_pre_flop_players_actions() -> None:
         ),
     )
 
+    # Keep dropdown widget state aligned with each player's true saved position.
+    for idx, player in enumerate(players):
+        key = f"preflop_player_position_{idx}"
+        true_position = player.get("Position", POSITIONS[0])
+        if true_position not in POSITIONS:
+            true_position = POSITIONS[0]
+            players[idx]["Position"] = true_position
+        if st.session_state.get(key) != true_position:
+            st.session_state[key] = true_position
+
     player_cols = st.columns(len(players), gap="small")
     for col_idx, idx in enumerate(ordered_indices):
         player = players[idx]
@@ -347,6 +357,33 @@ def _build_hand_notation() -> Optional[str]:
 
     suited_flag = "s" if suit_1 == suit_2 else "o"
     return f"{high_card}{low_card}{suited_flag}"
+
+
+def _rotate_players_positions_next_hand() -> None:
+    players = st.session_state["players"]
+    if not players:
+        return
+
+    next_position = {
+        "UTG": "MP",
+        "MP": "CO",
+        "CO": "BTN",
+        "BTN": "SB",
+        "SB": "BB",
+        "BB": "UTG",
+    }
+
+    for player in players:
+        current = player.get("Position", "UTG")
+        player["Position"] = next_position.get(current, "UTG")
+
+
+def _get_pyrex_position() -> str:
+    for player in st.session_state["players"]:
+        if str(player.get("Name", "")).strip().lower() == "pyrex":
+            position = player.get("Position", POSITIONS[0])
+            return position if position in POSITIONS else POSITIONS[0]
+    return POSITIONS[0]
 
 
 def _row_picker(row_id: int, names: list[str]) -> None:
@@ -526,6 +563,11 @@ def _render_players_section() -> None:
 _init_state()
 
 
+if st.button("Next Hand", key="next_hand_btn", use_container_width=False):
+    _rotate_players_positions_next_hand()
+    st.rerun()
+
+
 st.title("My hand")
 
 st.header("First card")
@@ -539,16 +581,13 @@ _row_picker(3, CARD_ORDER)
 _row_picker(4, COLOR_ORDER)
 
 st.divider()
-_position_picker()
-
-st.divider()
+selected_position = _get_pyrex_position()
 st.subheader("Hand")
 hand_notation = _build_hand_notation()
-selected_position = st.session_state.get("selected_position", "")
-if hand_notation is None or not selected_position:
-    st.write("Select all 4 rows and one position to build your hand.")
+if hand_notation is None:
+    st.write("Select all 4 rows to build your hand.")
 else:
-    st.success(hand_notation)
+    st.success(f"{hand_notation}, {selected_position}")
 
 st.divider()
 st.subheader("The Pre Flop Session")
