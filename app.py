@@ -8,6 +8,12 @@ import streamlit.components.v1 as components
 from cold_call_section import COLD_CALL_CHARTS
 from iso_raise_section import DEFAULT_ISO_RAISE_HANDS
 from over_call_section import OVER_CALL_HANDS
+from play_engine import evaluate_play as shared_evaluate_play
+from play_engine import is_play_context_possible as shared_is_play_context_possible
+from play_engine import load_plays as shared_load_plays
+from play_engine import load_rfi_actions as shared_load_rfi_actions
+from play_engine import status_color_marker as shared_status_color_marker
+from play_engine import status_rank as shared_status_rank
 from squeeze_section import SQUEEZE_RANGES
 from three_bet_section import THREE_BET_BLUFFS, THREE_BET_DEFAULTS
 
@@ -111,8 +117,7 @@ def _init_state() -> None:
 
 
 def _load_plays() -> List[Dict[str, Any]]:
-    with PLAYS_JSON_PATH.open("r", encoding="utf-8") as f:
-        return json.load(f)
+    return shared_load_plays()
 
 
 def _load_players_database() -> Dict[str, Dict[str, Any]]:
@@ -156,73 +161,11 @@ def _delete_player_from_database(name: str) -> None:
 
 @st.cache_data
 def _load_rfi_actions() -> Dict[str, Dict[str, str]]:
-    actions: Dict[str, Dict[str, str]] = {}
-    for config_path in sorted(RFI_CONFIGS_DIR.glob("*.json")):
-        with config_path.open("r", encoding="utf-8") as f:
-            data = json.load(f)
-        actions[data["position"]] = data["hand_actions"]
-    return actions
+    return shared_load_rfi_actions()
 
 
 def _evaluate_play(play_name: str, hand: str, position: str) -> Tuple[Optional[bool], str]:
-    rfi_actions = _load_rfi_actions()
-
-    if play_name == "Raising First In":
-        if position not in rfi_actions:
-            return None, f"No RFI chart configured for {position}."
-        is_possible = rfi_actions[position].get(hand) == "raise"
-        return is_possible, "In RFI raise range." if is_possible else "Not in RFI raise range."
-
-    if play_name == "3-Bet":
-        if position not in THREE_BET_DEFAULTS:
-            return None, f"No 3-bet chart configured for {position}."
-        is_possible = hand in THREE_BET_DEFAULTS[position] or hand in THREE_BET_BLUFFS
-        return is_possible, "In 3-bet value/bluff range." if is_possible else "Not in 3-bet value/bluff range."
-
-    if play_name == "4-Bet":
-        if position not in THREE_BET_DEFAULTS:
-            return None, f"No 4-bet chart configured for {position}."
-        is_possible = hand in THREE_BET_DEFAULTS[position] or hand in THREE_BET_BLUFFS
-        return is_possible, "In 4-bet value/bluff range." if is_possible else "Not in 4-bet value/bluff range."
-
-    if play_name == "Cold Call":
-        if position not in COLD_CALL_CHARTS:
-            return None, f"No cold-call chart configured for {position}."
-        cold_call = COLD_CALL_CHARTS[position]["cold_call"]
-        is_possible = hand in cold_call
-        return is_possible, "In cold-call range." if is_possible else "Not in cold-call range."
-
-    if play_name == "Set Mining":
-        is_possible = hand in SET_MINING_HANDS
-        return is_possible, "Small pocket pair for set mining." if is_possible else "Not a set-mining pocket pair."
-
-    if play_name == "Isolation Raise":
-        is_possible = hand in DEFAULT_ISO_RAISE_HANDS
-        return is_possible, "In iso-raise range." if is_possible else "Not in iso-raise range."
-
-    if play_name == "Limp":
-        return None, "Limp is sequence-based in this app (no hand chart configured)."
-
-    if play_name == "Overcall":
-        is_possible = hand in OVER_CALL_HANDS
-        return is_possible, "In overcall range." if is_possible else "Not in overcall range."
-
-    if play_name == "Squeeze":
-        if position not in SQUEEZE_RANGES:
-            return None, f"No squeeze chart configured for {position}."
-        ranges = SQUEEZE_RANGES[position]
-        is_possible = hand in ranges["default"] or hand in ranges["optional"]
-        return is_possible, "In squeeze range (default/optional)." if is_possible else "Not in squeeze range."
-
-    if play_name == "Steal":
-        if position not in rfi_actions:
-            return None, f"No RFI chart configured for {position}."
-        if position not in STEAL_POSITIONS:
-            return False, "Steal considered only from CO/BTN/SB."
-        is_possible = rfi_actions[position].get(hand) == "raise"
-        return is_possible, "In steal/open range from late position." if is_possible else "Not in late-position steal range."
-
-    return None, "Unknown play mapping."
+    return shared_evaluate_play(play_name, hand, position)
 
 
 def _actions_before_pyrex() -> List[str]:
@@ -258,75 +201,11 @@ def _actions_before_pyrex() -> List[str]:
 
 
 def _is_play_context_possible(play_name: str, hero_position: str) -> Tuple[Optional[bool], str]:
-    actions = _actions_before_pyrex()
-    has_entry = any(a in {"Call", "Raise"} for a in actions)
-    has_raise = any(a == "Raise" for a in actions)
-    raises_count = sum(1 for a in actions if a == "Raise")
-    has_limp = any(a == "Limp" for a in actions)
-
-    caller_after_raise = False
-    seen_raise = False
-    for action in actions:
-        if action == "Raise":
-            seen_raise = True
-        elif action == "Call" and seen_raise:
-            caller_after_raise = True
-
-    if play_name == "Raising First In":
-        is_possible = not has_entry
-        return is_possible, "No one entered before you." if is_possible else "Someone already entered the pot."
-
-    if play_name == "Steal":
-        if hero_position not in STEAL_POSITIONS:
-            return False, "Steal applies only from CO/BTN/SB."
-        is_possible = not has_entry
-        return is_possible, "Unopened pot from late position." if is_possible else "Pot already opened before you."
-
-    if play_name == "Limp":
-        is_possible = not has_raise
-        return is_possible, "No raise before you (open-limp/over-limp possible)." if is_possible else "Cannot limp after a raise."
-
-    if play_name == "Isolation Raise":
-        is_possible = has_limp and not has_raise
-        return is_possible, "Limp(s) before you with no raise." if is_possible else "Needs limp before you and no prior raise."
-
-    if play_name == "3-Bet":
-        is_possible = raises_count == 1
-        return is_possible, "Exactly one raise before you." if is_possible else "3-bet needs exactly one prior raise."
-
-    if play_name == "4-Bet":
-        is_possible = raises_count >= 2
-        return is_possible, "Two or more raises before you." if is_possible else "4-bet needs raise + re-raise before you."
-
-    if play_name == "Cold Call":
-        if hero_position not in {"UTG", "MP", "CO"}:
-            return False, "Cold Call is only considered from UTG/MP/CO in this app."
-        is_possible = has_raise
-        return is_possible, "Your first action can call a prior raise." if is_possible else "Cold call needs a raise before you."
-
-    if play_name == "Overcall":
-        is_possible = has_raise and caller_after_raise
-        return is_possible, "Raise + caller before you." if is_possible else "Overcall needs a raise and at least one caller before you."
-
-    if play_name == "Squeeze":
-        is_possible = raises_count == 1 and caller_after_raise
-        return is_possible, "Raise plus caller(s) before you." if is_possible else "Squeeze needs one raise and caller(s) before you."
-
-    if play_name == "Set Mining":
-        is_possible = has_raise
-        return is_possible, "Set-mining call is relevant facing a raise." if is_possible else "Set mining here needs a raise before you."
-
-    return None, "No sequence rule configured for this play."
+    return shared_is_play_context_possible(play_name, hero_position, _actions_before_pyrex())
 
 
 def _status_rank(possible: Optional[bool], blocked_by_context: bool) -> int:
-    if blocked_by_context:
-        return 3
-    if possible is True:
-        return 0
-    if possible is None:
-        return 1
-    return 2
+    return shared_status_rank(possible, blocked_by_context)
 
 
 def _status_meta(possible: Optional[bool]) -> Tuple[str, str]:
@@ -338,13 +217,7 @@ def _status_meta(possible: Optional[bool]) -> Tuple[str, str]:
 
 
 def _status_color_marker(possible: Optional[bool], blocked_by_context: bool) -> str:
-    if blocked_by_context:
-        return "⚪"
-    if possible is True:
-        return "🟢"
-    if possible is None:
-        return "🟡"
-    return "🔴"
+    return shared_status_color_marker(possible, blocked_by_context)
 
 
 def _render_plays_matrix(hand: Optional[str], position: str) -> None:

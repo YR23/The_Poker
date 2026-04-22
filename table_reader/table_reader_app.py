@@ -1,3 +1,4 @@
+import importlib
 import subprocess
 import sys
 from pathlib import Path
@@ -6,8 +7,13 @@ import streamlit as st
 
 # Add table_reader directory to path so reader_utils can be imported
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import play_engine
+
+play_engine = importlib.reload(play_engine)
 from reader_utils import (
     assign_table_positions,
+    build_preflop_hand_rank,
     extract_player_sections,
     process_positions_parallel,
 )
@@ -24,12 +30,8 @@ ALL_POSITIONS = [
 st.set_page_config(page_title="Table Reader", layout="wide")
 st.title("Poker Table Reader")
 
-if st.button("📸 Capture & Analyze Table", use_container_width=True):
-    with st.spinner("Capturing screenshot..."):
-        from reader_utils import capture_screen
-        capture_screen(SCREEN_IMAGE, display_index=2)
-
-    with st.spinner("Processing table..."):
+if st.button("Analyze Current Screen", use_container_width=True):
+    with st.spinner("Processing saved screen.png..."):
         extract_player_sections(DCIM_DIR)
         results = process_positions_parallel(PLAYERS_DIR, ALL_POSITIONS, max_workers=6)
 
@@ -67,6 +69,8 @@ if "results" in st.session_state:
         st.session_state["hero_left_color"] = detected_left_color or COLORS[0]
         st.session_state["hero_right_rank"] = detected_right_rank or RANKS[0]
         st.session_state["hero_right_color"]= detected_right_color or COLORS[0]
+        st.session_state["confirmed_hand"] = ""
+        st.session_state["confirmed_hand_parts"] = {}
         st.session_state["_last_detected_hand"] = detected_hand
 
     col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 2, 2])
@@ -102,11 +106,10 @@ if "results" in st.session_state:
         st.write("&nbsp;", unsafe_allow_html=True)  # vertical spacer to align button
         confirm_clicked = st.button("✅ Confirm Hand", use_container_width=True)
 
+    effective_hand = build_preflop_hand_rank(left_rank, right_rank, left_color, right_color)
+
     if confirm_clicked:
-        # Rebuild hand notation from the (possibly corrected) dropdowns
-        from reader_utils import build_preflop_hand_rank
-        confirmed = build_preflop_hand_rank(left_rank, right_rank, left_color, right_color)
-        st.session_state["confirmed_hand"] = confirmed
+        st.session_state["confirmed_hand"] = effective_hand
         st.session_state["confirmed_hand_parts"] = {
             "left_rank": left_rank, "left_color": left_color,
             "right_rank": right_rank, "right_color": right_color,
@@ -115,6 +118,61 @@ if "results" in st.session_state:
 
     if st.session_state.get("confirmed_hand"):
         st.success(f"Confirmed hand: **{st.session_state['confirmed_hand']}**")
+
+    hero_position = str(hero.get("table_position", "")).upper()
+    prior_actions = play_engine.infer_prior_actions_from_results(results, hero_seat="bottom_middle")
+    prior_action_labels = [
+        f"{entry['position']} {entry['action']}"
+        for entry in prior_actions
+        if entry.get("action") != "Fold"
+    ]
+    displayed_hand = st.session_state.get("confirmed_hand") or effective_hand
+
+    st.divider()
+    st.subheader("Plays")
+
+    context_cols = st.columns([1, 2])
+    with context_cols[0]:
+        st.caption(f"Hero position: {hero_position or '—'}")
+        st.caption(f"Hand: {displayed_hand or '—'}")
+    with context_cols[1]:
+        if prior_action_labels:
+            st.caption(f"Prior actions: {' -> '.join(prior_action_labels)}")
+        else:
+            st.caption("Prior actions: unopened pot")
+
+    evaluated_plays = play_engine.evaluate_plays_for_spot(
+        displayed_hand or None,
+        hero_position,
+        [entry["action"] for entry in prior_actions],
+    )
+
+    play_idx = 0
+    for _ in range(3):
+        cols = st.columns(4, gap="small")
+        for col in cols:
+            if play_idx >= len(evaluated_plays):
+                continue
+
+            item = evaluated_plays[play_idx]
+            play_idx += 1
+
+            play = item["play"]
+            possible = item["possible"]
+            blocked_by_context = item["blocked_by_context"]
+            reason = item["reason"]
+
+            with col:
+                other_names = play.get("other_names", [])
+                if other_names:
+                    title = f"{play['name']} ({', '.join(other_names)})"
+                else:
+                    title = play["name"]
+
+                color_marker = play_engine.status_color_marker(possible, blocked_by_context)
+                with st.expander(f"{color_marker} {title}", expanded=False):
+                    st.write(play["description"])
+                    st.caption(reason)
 
     st.divider()
     st.subheader("Results")
