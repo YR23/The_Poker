@@ -14,11 +14,23 @@ play_engine = importlib.reload(play_engine)
 from reader_utils import (
     assign_table_positions,
     build_preflop_hand_rank,
+    capture_screen,
     extract_player_sections,
     process_positions_parallel,
 )
 
 import json
+import time
+
+_TRACKER_STATE_PATH = Path(__file__).resolve().parent / "last_table_state.json"
+
+# Initialize tracker state in session if not present
+if "tracker_state" not in st.session_state:
+    try:
+        with open(_TRACKER_STATE_PATH, "r") as _f:
+            st.session_state["tracker_state"] = json.load(_f)
+    except Exception:
+        st.session_state["tracker_state"] = {}
 
 DCIM_DIR = Path(__file__).resolve().parent / "DCIM"
 PLAYERS_DIR = DCIM_DIR / "players"
@@ -26,8 +38,19 @@ SCREEN_IMAGE = DCIM_DIR / "screen.png"
 MAIN_RIGHT_IMAGE = DCIM_DIR / "main_right.png"
 
 _DB_PATH = Path(__file__).resolve().parent.parent / "players_database.json"
-with open(_DB_PATH, "r") as _f:
-    PLAYERS_DB: dict = json.load(_f)
+try:
+    with open(_DB_PATH, "r") as _f:
+        PLAYERS_DB: dict = json.load(_f)
+except Exception:
+    PLAYERS_DB = {}
+
+_STATS_PATH = Path(__file__).resolve().parent.parent / "players_hand_stats.json"
+try:
+    with open(_STATS_PATH, "r") as _f:
+        PLAYER_STATS = json.load(_f)
+except Exception:
+    PLAYER_STATS = {}
+
 ALL_POSITIONS = [
     "top_left", "top_middle", "top_right",
     "bottom_left", "bottom_middle", "bottom_right",
@@ -37,9 +60,40 @@ st.set_page_config(page_title="Table Reader", layout="wide")
 st.title("Poker Table Reader")
 
 if st.button("Analyze Current Screen", use_container_width=True):
-    with st.spinner("Processing saved screen.png..."):
+    with st.spinner("Capturing screenshot and processing..."):
+        # capture_screen(SCREEN_IMAGE, display_index=2)  # Capture external monitor (disabled temporarily)
         extract_player_sections(DCIM_DIR)
         results = process_positions_parallel(PLAYERS_DIR, ALL_POSITIONS, max_workers=6)
+
+    # Use tracker state from session
+    _tracker_state = st.session_state["tracker_state"]
+
+    # Auto-tracker logic: compare and update only if action changed
+    changed = False
+    for pos, pdata in results.items():
+        name = (pdata.get("name") or "").strip()
+        action = (pdata.get("action") or "").strip()
+        prev_action = (_tracker_state.get(pos, {}).get("action") or "").strip()
+        if name and action and action != prev_action:
+            changed = True
+    if changed:
+        st.session_state["tracker_state"] = results
+        _tracker_state = results
+
+    # Update player stats
+    for pos, data in results.items():
+        name = (data.get("name") or "").strip()
+        action = (data.get("action") or "").strip().upper()
+        if not name:
+            continue
+        stats = PLAYER_STATS.setdefault(name, {"hands_seen": 0, "not_folded": 0, "vpip": 0})
+        stats["hands_seen"] += 1
+        if action and action != "FOLD":
+            stats["not_folded"] += 1
+        if action in {"RAISE", "CALL"}:
+            stats["vpip"] += 1
+    with open(_STATS_PATH, "w") as _f:
+        json.dump(PLAYER_STATS, _f, indent=2)
 
     st.session_state["position_warning"] = assign_table_positions(results)
     st.session_state["results"] = results
@@ -209,6 +263,7 @@ if "results" in st.session_state:
         name = data.get('name', '') or ''
         db_entry = PLAYERS_DB.get(name.strip()) if name.strip() else None
         in_db = db_entry is not None
+        stats = PLAYER_STATS.get(name.strip()) if name.strip() else None
 
         st.markdown(f"**{position.replace('_', ' ').title()}**")
         if data.get("is_dealer", False):
@@ -234,6 +289,9 @@ if "results" in st.session_state:
             st.write(f"🧑 `{name or '—'}`" + (" &nbsp;&nbsp;&nbsp; ❌ HUD: False" if name.strip() else ""), unsafe_allow_html=True)
             st.write(f"💰 `{pot_size}`")
             st.write(f"🃏 `{action}`")
+
+        if stats:
+            st.caption(f"Hands: {stats['hands_seen']} | Not Folded: {stats['not_folded']} | VPIP: {stats['vpip']}")
 
     # Row 1: top_middle in center
     r1 = st.columns(3)
@@ -307,5 +365,50 @@ if st.button("Save to Archive", use_container_width=True):
         st.success(f"'{new_name}' saved to archive.")
         st.session_state["_reset_new_player"] = True
         st.rerun()
+
+# Show tracker state at the top
+if st.session_state.get("tracker_state"):
+    st.divider()
+    st.subheader("[DEBUG] Last Tracked Table State")
+    for pos, pdata in st.session_state["tracker_state"].items():
+        st.caption(f"{pos}: {pdata.get('name','')} - {pdata.get('action','')}")
+# Show last tracked actions (for debug)
+_TRACKER_STATE_PATH = Path(__file__).resolve().parent / "last_table_state.json"
+try:
+    with open(_TRACKER_STATE_PATH, "r") as _f:
+        _tracker_state = json.load(_f)
+except Exception:
+    _tracker_state = {}
+
+if st.button("Start Auto-Track (Block Until My Turn)"):
+    st.warning("Auto-tracking started. The app will block until it's your turn.")
+    last_state = st.session_state.get("tracker_state", {})
+    my_seat = "bottom_middle"
+    while True:
+        extract_player_sections(DCIM_DIR)
+        current_state = process_positions_parallel(PLAYERS_DIR, ALL_POSITIONS, max_workers=6)
+        print_state_diff(last_state, current_state)
+        # Check if all before hero have acted
+        hero_pos = str(current_state.get(my_seat, {}).get("table_position", "")).upper()
+        if hero_pos in play_engine.POSITIONS:
+            idx = play_engine.POSITIONS.index(hero_pos)
+            positions_before = play_engine.POSITIONS[:idx]
+            all_acted = True
+            for pos in positions_before:
+                found = False
+                for pdata in current_state.values():
+                    if str(pdata.get("table_position", "")).upper() == pos:
+                        found = True
+                        if not pdata.get("action") or pdata.get("action").upper() in ("", "NO ACTION YET"):
+                            all_acted = False
+                        break
+                if not found:
+                    all_acted = False
+            if all_acted:
+                st.success("It's your turn! Auto-tracking stopped.")
+                break
+        last_state = current_state
+        time.sleep(2)
+    st.session_state["tracker_state"] = last_state
 
 

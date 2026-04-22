@@ -173,11 +173,11 @@
     "VPIP": 28,
     "PFR": 17,
     "3-BET": 8,
-    "Fold to 3-Bet": 46,
+    "Fold to 3-Bet": 45,
     "C-BET": 58,
-    "Fold to C-Bet": 35,
+    "Fold to C-Bet": 34,
     "Steal": 30,
-    "Check/Raise": 7
+    "Check/Raise": 8
   },
   "Stalino": {
     "VPIP": 30,
@@ -258,5 +258,45 @@
     "Fold to C-Bet": 20,
     "Steal": 20,
     "Check/Raise": 20
+  },
+  "tres2b": {
+    "VPIP": 21,
+    "PFR": 16,
+    "3-BET": 4,
+    "Fold to 3-Bet": 58,
+    "C-BET": 63,
+    "Fold to C-Bet": 36,
+    "Steal": 35,
+    "Check/Raise": 7
+  },
+  "ThugFish": {
+    "VPIP": 25,
+    "PFR": 19,
+    "3-BET": 8,
+    "Fold to 3-Bet": 51,
+    "C-BET": 65,
+    "Fold to C-Bet": 30,
+    "Steal": 40,
+    "Check/Raise": 8
+  },
+  "RedSteel": {
+    "VPIP": 22,
+    "PFR": 11,
+    "3-BET": 3,
+    "Fold to 3-Bet": 40,
+    "C-BET": 44,
+    "Fold to C-Bet": 37,
+    "Steal": 25,
+    "Check/Raise": 0
+  },
+  "Frickerle": {
+    "VPIP": 39,
+    "PFR": 27,
+    "3-BET": 15,
+    "Fold to 3-Bet": 19,
+    "C-BET": 63,
+    "Fold to C-Bet": 28,
+    "Steal": 42,
+    "Check/Raise": 15
   }
 }

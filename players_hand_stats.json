@@ -1,0 +1,42 @@
+{
+  "ThugFish": {
+    "hands_seen": 9,
+    "not_folded": 0,
+    "vpip": 0
+  },
+  "RedSteel": {
+    "hands_seen": 9,
+    "not_folded": 1,
+    "vpip": 1
+  },
+  "Frickerle": {
+    "hands_seen": 4,
+    "not_folded": 1,
+    "vpip": 0
+  },
+  "tres2b": {
+    "hands_seen": 9,
+    "not_folded": 0,
+    "vpip": 0
+  },
+  "Pyrex": {
+    "hands_seen": 7,
+    "not_folded": 0,
+    "vpip": 0
+  },
+  "budaloto": {
+    "hands_seen": 9,
+    "not_folded": 6,
+    "vpip": 5
+  },
+  "Pyrex -": {
+    "hands_seen": 2,
+    "not_folded": 0,
+    "vpip": 0
+  },
+  "Ch23": {
+    "hands_seen": 5,
+    "not_folded": 0,
+    "vpip": 0
+  }
+}

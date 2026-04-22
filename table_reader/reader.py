@@ -1,10 +1,10 @@
 from pathlib import Path
 
 from reader_utils import (
-	assign_table_positions,
 	capture_screen,
 	extract_player_sections,
 	process_positions_parallel,
+	button_crop_and_check_turn
 )
 
 
@@ -13,10 +13,16 @@ if __name__ == "__main__":
 	full_screenshot = dcim_dir / "screen.png"
 
 	# Step 1: Capture fresh screenshot.
-	# capture_screen(full_screenshot, display_index=2)
+	capture_screen(full_screenshot, display_index=2)
 	print(f"Step 1 complete: {full_screenshot}")
 
 	extract_player_sections(dcim_dir)
+
+	# After main_right is cropped, crop the button and check turn (no saving needed)
+	main_right = dcim_dir / "main_right.png"
+	turn_status = button_crop_and_check_turn(main_right)
+	print(f"{'My turn' if turn_status else 'Not my turn'} detected based on button OCR.")
+	print(f"Step X: Button crop/turn status: {turn_status}")
 
 	# Step 6: Process per-position pipeline in parallel (organize + OCR).
 	players_dir = dcim_dir / "players"

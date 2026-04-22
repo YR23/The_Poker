@@ -253,7 +253,7 @@ def is_player_folded(name_image_path: Path, brightness_threshold: int = 150) -> 
 def is_dealer_present(
     player_image_path: Path,
     dealer_button_path: Path,
-    threshold: float = 0.90,
+    threshold: float = 0.75,
 ) -> bool:
     """Detect dealer button using template matching on a player's main image."""
     if not player_image_path.exists() or not dealer_button_path.exists():
@@ -273,6 +273,7 @@ def is_dealer_present(
 
         result = cv2.matchTemplate(scene, template, cv2.TM_CCOEFF_NORMED)
         _, max_val, _, _ = cv2.minMaxLoc(result)
+        print(f"[DEALER DEBUG] {player_image_path.name} vs {dealer_button_path.name} max_val={max_val:.4f} (threshold={threshold})")
         return max_val >= threshold
     except Exception as e:
         print(f"Dealer detection error for {player_image_path}: {e}")
@@ -879,3 +880,43 @@ def assign_table_positions(results: dict[str, dict[str, str | bool]]) -> str | N
         return "Multiple dealer matches found. Using the first clockwise match."
 
     return None
+
+
+def button_crop_and_check_turn(main_right_path: Path, crop_margins=None, keywords=("YOUR TURN", "MY TURN"), acceptable_chars="XFold/") -> str:
+    """
+    Crop a region from main_right.png using the exact hero_left_card logic (no rotation), save as button.png,
+    OCR the text, and return 'My turn' if a keyword is found.
+    crop_margins: (left, top, right, bottom) margins in pixels to crop from each side. If None, use default.
+    keywords: tuple of strings to match for 'my turn'.
+    acceptable_chars: string of allowed characters to filter OCR output (default: 'XFOLD').
+    """
+    from PIL import Image
+    import pytesseract
+    import os
+    import re
+
+    # Default margins (same as hero_left_card_margins)
+    if crop_margins is None:
+        crop_margins = (1050, 1180, 480, 0)
+
+    with Image.open(main_right_path) as img:
+        width, height = img.size
+        ll, lt, lr, lb = crop_margins
+        left = max(0, min(int(ll), width - 1))
+        top = max(0, min(int(lt), height - 1))
+        right = max(left + 1, min(width - int(lr), width))
+        bottom = max(top + 1, min(height - int(lb), height))
+        crop_box = (left, top, right, bottom)
+        cropped = img.crop(crop_box)
+        # Save cropped image as button.png in the same directory as main_right_path
+        button_path = os.path.join(os.path.dirname(main_right_path), "button.png")
+        cropped.save(button_path)
+        ocr_cfg = f"--psm 7 -c tessedit_char_whitelist={acceptable_chars}"
+        text = pytesseract.image_to_string(cropped, config=ocr_cfg).upper()
+        filtered = re.sub(f"[^{acceptable_chars}]", "", text)
+        for kw in keywords:
+            if "X/F" in text:
+                return False
+            if "FOLD" in text:
+                return True
+    return False
