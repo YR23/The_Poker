@@ -5,6 +5,7 @@ import re
 import subprocess
 from pathlib import Path
 
+import cv2
 from PIL import Image, ImageEnhance, ImageOps
 import pytesseract
 
@@ -248,6 +249,35 @@ def is_player_folded(name_image_path: Path, brightness_threshold: int = 150) -> 
         return False
 
 
+def is_dealer_present(
+    player_image_path: Path,
+    dealer_button_path: Path,
+    threshold: float = 0.90,
+) -> bool:
+    """Detect dealer button using template matching on a player's main image."""
+    if not player_image_path.exists() or not dealer_button_path.exists():
+        return False
+
+    try:
+        scene = cv2.imread(str(player_image_path), cv2.IMREAD_COLOR)
+        template = cv2.imread(str(dealer_button_path), cv2.IMREAD_COLOR)
+
+        if scene is None or template is None:
+            return False
+
+        sh, sw = scene.shape[:2]
+        th, tw = template.shape[:2]
+        if th > sh or tw > sw:
+            return False
+
+        result = cv2.matchTemplate(scene, template, cv2.TM_CCOEFF_NORMED)
+        _, max_val, _, _ = cv2.minMaxLoc(result)
+        return max_val >= threshold
+    except Exception as e:
+        print(f"Dealer detection error for {player_image_path}: {e}")
+        return False
+
+
 def extract_action_text_from_image(image_path: Path) -> str:
     """Extract action text from an active player's action image.
 
@@ -485,16 +515,18 @@ def organize_player_sections(players_dir: Path, positions: list[str] | None = No
             )
 
 
-def extract_player_text(players_dir: Path, position: str) -> dict[str, str]:
+def extract_player_text(players_dir: Path, position: str) -> dict[str, str | bool]:
     """Extract text from name.png and pot_size.png for a specific player position.
 
-    Returns dict with keys: 'position', 'name', 'pot_size', 'action'
+    Returns dict with keys: 'position', 'name', 'pot_size', 'action', 'is_dealer'
     """
     position_dir = players_dir / position
 
     name_image = position_dir / "name.png"
     pot_size_image = position_dir / "pot_size.png"
     action_image = position_dir / "action.png"
+    player_image = position_dir / f"{position}.png"
+    dealer_button_image = players_dir.parent / "dealer.png"
 
     name_text = extract_text_from_image(name_image) if name_image.exists() else ""
     pot_size_text = (
@@ -511,16 +543,62 @@ def extract_player_text(players_dir: Path, position: str) -> dict[str, str]:
     else:
         action_text = ""
 
+    is_dealer = is_dealer_present(player_image, dealer_button_image)
+
     result = {
         "position": position,
         "name": name_text,
         "pot_size": pot_size_text,
         "action": action_text,
+        "is_dealer": is_dealer,
     }
 
     print(f"{position}:")
     print(f"  Name: {name_text}")
     print(f"  Pot Size: {pot_size_text}")
     print(f"  Action: {action_text if action_text else 'No action yet'}")
+    print(f"  Dealer: {'YES' if is_dealer else 'NO'}")
 
     return result
+
+
+def assign_table_positions(results: dict[str, dict[str, str | bool]]) -> str | None:
+    """Assign BTN/SB/BB/UTG/MP/CO to results based on detected dealer seat.
+
+    Returns an optional warning message when multiple dealer matches are found.
+    """
+    clockwise_order = [
+        "top_middle",
+        "top_right",
+        "bottom_right",
+        "bottom_middle",
+        "bottom_left",
+        "top_left",
+    ]
+    table_roles = ["BTN", "SB", "BB", "UTG", "MP", "CO"]
+
+    for seat in clockwise_order:
+        if seat in results:
+            results[seat]["table_position"] = ""
+
+    dealer_seats = [
+        seat
+        for seat in clockwise_order
+        if results.get(seat, {}).get("is_dealer", False)
+    ]
+
+    if not dealer_seats:
+        return None
+
+    dealer_seat = dealer_seats[0]
+    dealer_index = clockwise_order.index(dealer_seat)
+
+    for offset, role in enumerate(table_roles):
+        seat = clockwise_order[(dealer_index + offset) % len(clockwise_order)]
+        if seat in results:
+            results[seat]["table_position"] = role
+
+    if len(dealer_seats) > 1:
+        return "Multiple dealer matches found. Using the first clockwise match."
+
+    return None

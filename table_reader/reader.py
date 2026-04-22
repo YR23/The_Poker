@@ -1,6 +1,12 @@
 from pathlib import Path
 
-from reader_utils import capture_screen, extract_player_sections, organize_player_sections, extract_player_text
+from reader_utils import (
+	assign_table_positions,
+	capture_screen,
+	extract_player_sections,
+	extract_player_text,
+	organize_player_sections,
+)
 
 
 if __name__ == "__main__":
@@ -28,5 +34,15 @@ if __name__ == "__main__":
 
 	# Step 7: Extract text from name and pot_size images for all positions.
 	print("\nStep 7: Extracting text from split images...")
+	results = {}
 	for position in all_positions:
-		extract_player_text(players_dir, position)
+		results[position] = extract_player_text(players_dir, position)
+
+	warning = assign_table_positions(results)
+	if warning:
+		print(f"\nWarning: {warning}")
+
+	print("\nStep 8: Assigned table positions...")
+	for position in all_positions:
+		role = str(results[position].get("table_position", "")) or "—"
+		print(f"  {position}: {role}")
