@@ -229,6 +229,25 @@ def extract_pot_size_text_from_image(image_path: Path) -> str:
         return ""
 
 
+def is_player_folded(name_image_path: Path, brightness_threshold: int = 150) -> bool:
+    """Return True if the player's name text is dim (grey), indicating they have folded.
+
+    Active players have bright white text; folded players have visibly darker/grey text.
+    We measure the 95th-percentile pixel brightness of the name image — if even the
+    brightest pixels are below the threshold, the text is dim and the player is folded.
+    """
+    try:
+        with Image.open(name_image_path) as img:
+            gray = ImageOps.grayscale(img)
+            pixels = sorted(gray.getdata())
+            # 95th percentile — the brightest part of the text
+            p95_index = int(len(pixels) * 0.95)
+            p95_brightness = pixels[p95_index]
+            return p95_brightness < brightness_threshold
+    except Exception:
+        return False
+
+
 def extract_action_text_from_image(image_path: Path) -> str:
     """Extract action text allowing uppercase letters and hyphens.
     
@@ -257,40 +276,46 @@ def extract_action_text_from_image(image_path: Path) -> str:
             # Convert RGBA to RGB if needed
             if image.mode == "RGBA":
                 image = image.convert("RGB")
-            
+
+            # Scale up small images so Tesseract has enough pixels to work with
+            min_height = 80
+            w, h = image.size
+            if h < min_height:
+                scale = min_height / h
+                image = image.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+
             candidates: list[str] = []
+            ocr_cfg = "--psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ-"
 
-            # Try RGB first
-            rgb_text = pytesseract.image_to_string(
-                image,
-                config="--psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ-",
-            ).strip()
-            
-            if rgb_text:
-                candidates.append(rgb_text)
-            else:
-                # If RGB is empty, try grayscale
-                gray = ImageOps.grayscale(image)
-                gray_text = pytesseract.image_to_string(
-                    gray,
-                    config="--psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ-",
-                ).strip()
-                if gray_text:
-                    candidates.append(gray_text)
+            # Try RGB and its inverse
+            for img_variant in (image, ImageOps.invert(image)):
+                t = pytesseract.image_to_string(img_variant, config=ocr_cfg).strip()
+                if t:
+                    candidates.append(t)
 
-            # If still no text found, try preprocessing
-            if not candidates:
-                gray = ImageOps.grayscale(image)
-                for contrast in (2.0, 2.5, 3.0):
-                    hi = ImageEnhance.Contrast(gray).enhance(contrast)
-                    for threshold_val in (120, 130, 140, 150):
-                        bw = hi.point(lambda x: 255 if x > threshold_val else 0)
-                        text = pytesseract.image_to_string(
-                            bw,
-                            config="--psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ-",
-                        ).strip()
-                        if text:
-                            candidates.append(text)
+            # Always try grayscale and its inverse too
+            gray = ImageOps.grayscale(image)
+            for gray_variant in (gray, ImageOps.invert(gray)):
+                t = pytesseract.image_to_string(gray_variant, config=ocr_cfg).strip()
+                if t:
+                    candidates.append(t)
+
+            # Always try contrast+threshold preprocessing (both polarities)
+            for contrast in (2.0, 2.5, 3.0):
+                hi = ImageEnhance.Contrast(gray).enhance(contrast)
+                for threshold_val in (80, 100, 120, 140, 160):
+                    bw = hi.point(lambda x, t=threshold_val: 255 if x > t else 0)
+                    t = pytesseract.image_to_string(
+                        bw, config=ocr_cfg,
+                    ).strip()
+                    if t:
+                        candidates.append(t)
+                    bw_inv = hi.point(lambda x, t=threshold_val: 0 if x > t else 255)
+                    t = pytesseract.image_to_string(
+                        bw_inv, config=ocr_cfg,
+                    ).strip()
+                    if t:
+                        candidates.append(t)
 
             # Try to match candidates to valid actions
             for text in candidates:
@@ -506,11 +531,16 @@ def extract_player_text(players_dir: Path, position: str) -> dict[str, str]:
         else ""
     )
 
-    action_text = (
-        extract_action_text_from_image(action_image)
-        if action_image.exists()
-        else ""
-    )
+    # Determine active/not-active from name brightness, then run action OCR only for active players.
+    if name_image.exists() and is_player_folded(name_image):
+        action_text = "not-active"
+    else:
+        action_text = "active"
+    # action OCR disabled for now — kept for future use
+    # elif action_image.exists():
+    #     action_text = extract_action_text_from_image(action_image)
+    # else:
+    #     action_text = "active"
 
     result = {
         "position": position,
