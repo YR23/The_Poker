@@ -30,6 +30,11 @@
     "description": "This is when someone limps and you raise to play against them alone. The goal is to get heads-up with a weaker player."
   },
   {
+    "name": "Limp",
+    "other_names": ["Flat entry"],
+    "description": "This is when you call the big blind without raising. It can be open-limping or over-limping if there was no raise."
+  },
+  {
     "name": "Overcall",
     "other_names": ["Call behind"],
     "description": "This is when one player raises, another calls, and you also call. You join the pot without raising after multiple players are already in."
@@ -43,10 +48,5 @@
     "name": "Steal",
     "other_names": ["Blind steal"],
     "description": "This is when you raise from a late position to try to win the blinds. You are taking advantage of players who have not entered the pot."
-  },
-  {
-    "name": "Defending the Blinds",
-    "other_names": ["Blind defense"],
-    "description": "This is when you are in the big blind or small blind and decide to call or raise against a steal. You protect your blind from being taken too easily."
   }
 ]

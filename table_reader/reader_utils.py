@@ -230,38 +230,79 @@ def extract_pot_size_text_from_image(image_path: Path) -> str:
 
 
 def extract_action_text_from_image(image_path: Path) -> str:
-    """Extract action text allowing uppercase letters only."""
+    """Extract action text allowing uppercase letters and hyphens.
+    
+    Valid actions: FOLD, CHECK, BET, SB, BB, CALL, RAISE, ALL-IN
+    """
+    from difflib import SequenceMatcher
+    
+    VALID_ACTIONS = ["FOLD", "CHECK", "BET", "SB", "BB", "CALL", "RAISE", "ALLIN"]
+    
+    def closest_action(text: str, threshold: float = 0.4) -> str:
+        """Find closest valid action by string similarity."""
+        text = text.upper()
+        best_match = None
+        best_score = threshold
+        
+        for action in VALID_ACTIONS:
+            score = SequenceMatcher(None, text, action).ratio()
+            if score > best_score:
+                best_score = score
+                best_match = action
+        
+        return "ALL-IN" if best_match == "ALLIN" else (best_match or "")
+    
     try:
         with Image.open(image_path) as image:
-            gray = ImageOps.grayscale(image)
+            # Convert RGBA to RGB if needed
+            if image.mode == "RGBA":
+                image = image.convert("RGB")
+            
             candidates: list[str] = []
 
-            raw_text = pytesseract.image_to_string(
-                gray,
-                config="--psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+            # Try RGB first
+            rgb_text = pytesseract.image_to_string(
+                image,
+                config="--psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ-",
             ).strip()
-            if raw_text:
-                candidates.append(raw_text)
+            
+            if rgb_text:
+                candidates.append(rgb_text)
+            else:
+                # If RGB is empty, try grayscale
+                gray = ImageOps.grayscale(image)
+                gray_text = pytesseract.image_to_string(
+                    gray,
+                    config="--psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ-",
+                ).strip()
+                if gray_text:
+                    candidates.append(gray_text)
 
-            for contrast in (2.0, 2.5, 3.0):
-                hi = ImageEnhance.Contrast(gray).enhance(contrast)
-                for threshold in (120, 130, 140, 150):
-                    bw = hi.point(lambda x: 255 if x > threshold else 0)
-                    text = pytesseract.image_to_string(
-                        bw,
-                        config="--psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ",
-                    ).strip()
-                    if text:
-                        candidates.append(text)
+            # If still no text found, try preprocessing
+            if not candidates:
+                gray = ImageOps.grayscale(image)
+                for contrast in (2.0, 2.5, 3.0):
+                    hi = ImageEnhance.Contrast(gray).enhance(contrast)
+                    for threshold_val in (120, 130, 140, 150):
+                        bw = hi.point(lambda x: 255 if x > threshold_val else 0)
+                        text = pytesseract.image_to_string(
+                            bw,
+                            config="--psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ-",
+                        ).strip()
+                        if text:
+                            candidates.append(text)
 
-            normalized: list[str] = []
+            # Try to match candidates to valid actions
             for text in candidates:
                 cleaned = re.sub(r"[^A-Z]", "", text.upper())
                 if cleaned:
-                    normalized.append(cleaned)
-
-            if normalized:
-                return max(normalized, key=len)
+                    # First try exact match
+                    if cleaned in VALID_ACTIONS:
+                        return "ALL-IN" if cleaned == "ALLIN" else cleaned
+                    # Then try fuzzy match with lower threshold
+                    match = closest_action(cleaned, threshold=0.3)
+                    if match:
+                        return match
 
             return ""
     except Exception as e:
@@ -337,7 +378,7 @@ def organize_player_sections(players_dir: Path, positions: list[str] | None = No
     action_margins = {
         "bottom_left": (80, 190, 375, 410),
         "bottom_middle": (165, 425, 170, 172),
-        "bottom_right": (0, 0, 0, 0), # left, top, right, bottom
+        "bottom_right": (250, 180, 200, 400), # left, top, right, bottom
         "top_left": (120, 157, 330, 295),
         "top_middle": (170, 200, 295, 220),
         "top_right": (210, 160, 220, 290),
@@ -464,6 +505,7 @@ def extract_player_text(players_dir: Path, position: str) -> dict[str, str]:
         if pot_size_image.exists()
         else ""
     )
+
     action_text = (
         extract_action_text_from_image(action_image)
         if action_image.exists()
@@ -480,6 +522,6 @@ def extract_player_text(players_dir: Path, position: str) -> dict[str, str]:
     print(f"{position}:")
     print(f"  Name: {name_text}")
     print(f"  Pot Size: {pot_size_text}")
-    print(f"  Action: {action_text}")
+    print(f"  Action: {action_text if action_text else 'No action yet'}")
 
     return result
