@@ -380,35 +380,136 @@ try:
 except Exception:
     _tracker_state = {}
 
-if st.button("Start Auto-Track (Block Until My Turn)"):
-    st.warning("Auto-tracking started. The app will block until it's your turn.")
-    last_state = st.session_state.get("tracker_state", {})
-    my_seat = "bottom_middle"
+if st.button("Auto-Capture Until My Turn", use_container_width=True):
+    st.warning("Auto-capturing... The app will block until it's your turn.")
+    session_statuses = []
     while True:
+        # Optionally capture a new screenshot here if needed
         extract_player_sections(DCIM_DIR)
-        current_state = process_positions_parallel(PLAYERS_DIR, ALL_POSITIONS, max_workers=6)
-        print_state_diff(last_state, current_state)
-        # Check if all before hero have acted
-        hero_pos = str(current_state.get(my_seat, {}).get("table_position", "")).upper()
-        if hero_pos in play_engine.POSITIONS:
-            idx = play_engine.POSITIONS.index(hero_pos)
-            positions_before = play_engine.POSITIONS[:idx]
-            all_acted = True
-            for pos in positions_before:
-                found = False
-                for pdata in current_state.values():
-                    if str(pdata.get("table_position", "")).upper() == pos:
-                        found = True
-                        if not pdata.get("action") or pdata.get("action").upper() in ("", "NO ACTION YET"):
-                            all_acted = False
-                        break
-                if not found:
-                    all_acted = False
-            if all_acted:
-                st.success("It's your turn! Auto-tracking stopped.")
-                break
-        last_state = current_state
+        # Use the main_right image for button detection
+        turn_status = False
+        try:
+            from reader_utils import button_crop_and_check_turn
+            turn_status = button_crop_and_check_turn(MAIN_RIGHT_IMAGE)
+        except Exception as e:
+            st.error(f"Error during button OCR: {e}")
+            break
+        session_statuses.append(turn_status)
+        st.info(f"Button crop/turn status: {'My turn' if turn_status else 'Not my turn'} (capture {len(session_statuses)})")
+        if turn_status is True:
+            st.success("It's your turn! Auto-capture stopped.")
+            break
         time.sleep(2)
-    st.session_state["tracker_state"] = last_state
+    st.subheader("Session Turn Statuses")
+    for idx, status in enumerate(session_statuses, 1):
+        st.write(f"Capture {idx}: {'My turn' if status else 'Not my turn'}")
+
+# --- Auto-Capture Until My Turn with Manual Stop (side by side, only one set of buttons) ---
+if "auto_capture_running" not in st.session_state:
+    st.session_state["auto_capture_running"] = False
+if "auto_capture_stop" not in st.session_state:
+    st.session_state["auto_capture_stop"] = False
+
+col_auto, col_stop = st.columns([2, 1])
+with col_auto:
+    start_auto = st.button("Auto-Capture Until My Turn", use_container_width=True, key="auto_capture_start")
+with col_stop:
+    stop_auto = st.button("Stop Auto-Capture", use_container_width=True, key="auto_capture_stop_btn", disabled=not st.session_state["auto_capture_running"])
+
+if start_auto and not st.session_state["auto_capture_running"]:
+    st.session_state["auto_capture_running"] = True
+    st.session_state["auto_capture_stop"] = False
+    st.session_state["session_statuses"] = []  # Reset session captures on new start
+    st.rerun()
+if stop_auto and st.session_state["auto_capture_running"]:
+    st.session_state["auto_capture_stop"] = True
+    st.session_state["auto_capture_running"] = False
+    st.rerun()
+
+if st.session_state.get("auto_capture_running", False):
+    st.warning("Auto-capturing... The app will block until it's your turn or you stop it.")
+    if "session_statuses" not in st.session_state:
+        st.session_state["session_statuses"] = []
+    session_statuses = st.session_state["session_statuses"]
+    while st.session_state.get("auto_capture_running", False):
+        # --- Capture a new screenshot (like Analyze Current Screen) ---
+        try:
+            capture_screen(SCREEN_IMAGE, display_index=2)
+        except Exception as e:
+            st.error(f"Error capturing screenshot: {e}")
+            st.session_state["auto_capture_running"] = False
+            break
+        extract_player_sections(DCIM_DIR)
+        results = process_positions_parallel(PLAYERS_DIR, ALL_POSITIONS, max_workers=6)
+        _tracker_state = st.session_state["tracker_state"]
+        changed = False
+        for pos, pdata in results.items():
+            name = (pdata.get("name") or "").strip()
+            action = (pdata.get("action") or "").strip()
+            prev_action = (_tracker_state.get(pos, {}).get("action") or "").strip()
+            if name and action and action != prev_action:
+                changed = True
+        if changed:
+            st.session_state["tracker_state"] = results
+            _tracker_state = results
+        for pos, data in results.items():
+            name = (data.get("name") or "").strip()
+            action = (data.get("action") or "").strip().upper()
+            if not name:
+                continue
+            stats = PLAYER_STATS.setdefault(name, {"hands_seen": 0, "not_folded": 0, "vpip": 0})
+            stats["hands_seen"] += 1
+            if action and action != "FOLD":
+                stats["not_folded"] += 1
+            if action in {"RAISE", "CALL"}:
+                stats["vpip"] += 1
+        with open(_STATS_PATH, "w") as _f:
+            json.dump(PLAYER_STATS, _f, indent=2)
+        st.session_state["position_warning"] = assign_table_positions(results)
+        st.session_state["results"] = results
+        # --- Button OCR ---
+        turn_status = False
+        ocr_text = ""
+        try:
+            from reader_utils import button_crop_and_check_turn
+            turn_status, ocr_text = button_crop_and_check_turn(MAIN_RIGHT_IMAGE)
+        except Exception as e:
+            st.error(f"Error during button OCR: {e}")
+            st.session_state["auto_capture_running"] = False
+            break
+        session_statuses.append({
+            "turn_status": turn_status,
+            "ocr_text": ocr_text,
+            "results": results,
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+        })
+        st.session_state["session_statuses"] = session_statuses
+        st.info(f"Button crop/turn status: {'My turn' if turn_status else 'Not my turn'} | OCR text: '{ocr_text}' (capture {len(session_statuses)})")
+        # Print what changed between this and previous session for each player, right after each capture
+        if len(session_statuses) > 1:
+            prev_results = session_statuses[-2]["results"]
+            curr_results = session_statuses[-1]["results"]
+            st.write("**Changes since last capture:**")
+            for pos in ALL_POSITIONS:
+                prev = prev_results.get(pos, {})
+                curr = curr_results.get(pos, {})
+                changes = []
+                for k in set(prev.keys()).union(curr.keys()):
+                    if prev.get(k) != curr.get(k):
+                        changes.append(f"{k}: '{prev.get(k, '')}' → '{curr.get(k, '')}'")
+                if changes:
+                    st.write(f"- {pos}: {curr.get('name', '')} [{' | '.join(changes)}]")
+        if turn_status is True:
+            st.success("It's your turn! Auto-capture stopped.")
+            st.session_state["auto_capture_running"] = False
+            break
+        if st.session_state.get("auto_capture_stop", False):
+            st.info("Manual stop requested. Auto-capture stopped.")
+            st.session_state["auto_capture_running"] = False
+            break
+        # time.sleep(2)
+    st.subheader("Session Turn Statuses")
+    for idx, entry in enumerate(session_statuses, 1):
+        st.write(f"Capture {idx}: {'My turn' if entry['turn_status'] else 'Not my turn'} | OCR text: '{entry['ocr_text']}'")
 
 

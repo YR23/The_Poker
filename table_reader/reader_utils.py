@@ -882,10 +882,10 @@ def assign_table_positions(results: dict[str, dict[str, str | bool]]) -> str | N
     return None
 
 
-def button_crop_and_check_turn(main_right_path: Path, crop_margins=None, keywords=("YOUR TURN", "MY TURN"), acceptable_chars="XFold/") -> str:
+def button_crop_and_check_turn(main_right_path: Path, crop_margins=None, keywords=("YOUR TURN", "MY TURN"), acceptable_chars="XFold/") -> tuple[bool, str]:
     """
     Crop a region from main_right.png using the exact hero_left_card logic (no rotation), save as button.png,
-    OCR the text, and return 'My turn' if a keyword is found.
+    OCR the text, and return (turn_status, ocr_text) tuple.
     crop_margins: (left, top, right, bottom) margins in pixels to crop from each side. If None, use default.
     keywords: tuple of strings to match for 'my turn'.
     acceptable_chars: string of allowed characters to filter OCR output (default: 'XFOLD').
@@ -916,7 +916,7 @@ def button_crop_and_check_turn(main_right_path: Path, crop_margins=None, keyword
         filtered = re.sub(f"[^{acceptable_chars}]", "", text)
         for kw in keywords:
             if "X/F" in text:
-                return False
+                return False, text
             if "FOLD" in text:
-                return True
-    return False
+                return True, text
+    return False, text

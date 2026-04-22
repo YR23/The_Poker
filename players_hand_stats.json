@@ -20,7 +20,7 @@
     "vpip": 0
   },
   "Pyrex": {
-    "hands_seen": 7,
+    "hands_seen": 46,
     "not_folded": 0,
     "vpip": 0
   },
@@ -30,7 +30,7 @@
     "vpip": 5
   },
   "Pyrex -": {
-    "hands_seen": 2,
+    "hands_seen": 3,
     "not_folded": 0,
     "vpip": 0
   },
@@ -38,5 +38,60 @@
     "hands_seen": 5,
     "not_folded": 0,
     "vpip": 0
+  },
+  "Jinpoker": {
+    "hands_seen": 19,
+    "not_folded": 3,
+    "vpip": 3
+  },
+  "Redzep": {
+    "hands_seen": 18,
+    "not_folded": 3,
+    "vpip": 3
+  },
+  "SCV": {
+    "hands_seen": 19,
+    "not_folded": 0,
+    "vpip": 0
+  },
+  "MrCrum": {
+    "hands_seen": 19,
+    "not_folded": 0,
+    "vpip": 0
+  },
+  "NukeEmpy": {
+    "hands_seen": 19,
+    "not_folded": 3,
+    "vpip": 3
+  },
+  "Lz... o": {
+    "hands_seen": 1,
+    "not_folded": 1,
+    "vpip": 1
+  },
+  "hundredfold": {
+    "hands_seen": 21,
+    "not_folded": 0,
+    "vpip": 0
+  },
+  "katkapiratka": {
+    "hands_seen": 21,
+    "not_folded": 16,
+    "vpip": 16
+  },
+  "Sunley": {
+    "hands_seen": 21,
+    "not_folded": 2,
+    "vpip": 2
+  },
+  "tuvin": {
+    "hands_seen": 21,
+    "not_folded": 0,
+    "vpip": 0
+  },
+  "pokerinvest25": {
+    "hands_seen": 21,
+    "not_folded": 1,
+    "vpip": 1
   }
 }
