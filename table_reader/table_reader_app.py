@@ -9,8 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from reader_utils import (
     assign_table_positions,
     extract_player_sections,
-    extract_player_text,
-    organize_player_sections,
+    process_positions_parallel,
 )
 
 DCIM_DIR = Path(__file__).resolve().parent / "DCIM"
@@ -32,12 +31,7 @@ if st.button("📸 Capture & Analyze Table", use_container_width=True):
 
     with st.spinner("Processing table..."):
         extract_player_sections(DCIM_DIR)
-        organize_player_sections(PLAYERS_DIR, positions=ALL_POSITIONS)
-
-    results = {}
-    for position in ALL_POSITIONS:
-        result = extract_player_text(PLAYERS_DIR, position)
-        results[position] = result
+        results = process_positions_parallel(PLAYERS_DIR, ALL_POSITIONS, max_workers=6)
 
     st.session_state["position_warning"] = assign_table_positions(results)
     st.session_state["results"] = results

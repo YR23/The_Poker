@@ -4,8 +4,7 @@ from reader_utils import (
 	assign_table_positions,
 	capture_screen,
 	extract_player_sections,
-	extract_player_text,
-	organize_player_sections,
+	process_positions_parallel,
 )
 
 
@@ -14,14 +13,14 @@ if __name__ == "__main__":
 	full_screenshot = dcim_dir / "screen.png"
 
 	# Step 1: Capture fresh screenshot.
-	# capture_screen(full_screenshot, display_index=2)
+	capture_screen(full_screenshot, display_index=2)
 	print(f"Step 1 complete: {full_screenshot}")
 
 	extract_player_sections(dcim_dir)
 
-	# Step 6: Organize player sections for all bottom positions.
+	# Step 6: Process per-position pipeline in parallel (organize + OCR).
 	players_dir = dcim_dir / "players"
-	print("\nStep 6: Organizing player sections...")
+	print("\nStep 6: Parallel per-position processing...")
 	all_positions = [
 		"top_left",
 		"top_middle",
@@ -30,19 +29,13 @@ if __name__ == "__main__":
 		"bottom_middle",
 		"bottom_right",
 	]
-	organize_player_sections(players_dir, positions=all_positions)
-
-	# Step 7: Extract text from name and pot_size images for all positions.
-	print("\nStep 7: Extracting text from split images...")
-	results = {}
-	for position in all_positions:
-		results[position] = extract_player_text(players_dir, position)
+	results = process_positions_parallel(players_dir, all_positions, max_workers=6)
 
 	warning = assign_table_positions(results)
 	if warning:
 		print(f"\nWarning: {warning}")
 
-	print("\nStep 8: Assigned table positions...")
+	print("\nStep 7: Assigned table positions...")
 	for position in all_positions:
 		role = str(results[position].get("table_position", "")) or "—"
 		print(f"  {position}: {role}")

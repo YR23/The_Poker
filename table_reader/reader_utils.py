@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import platform
 import re
 import subprocess
@@ -337,6 +338,71 @@ def extract_action_text_from_image(image_path: Path) -> str:
 
 
 
+def extract_card_text_from_image(image_path: Path) -> str:
+    """Extract a single playing card rank from an image.
+
+    Valid values: A K Q J T 2 3 4 5 6 7 8 9 10
+    Whitelist is digits + face card letters only.
+    """
+    VALID_RANKS = {"A", "K", "Q", "J", "T", "10", "2", "3", "4", "5", "6", "7", "8", "9"}
+
+    try:
+        with Image.open(image_path) as image:
+            if image.mode == "RGBA":
+                image = image.convert("RGB")
+
+            # Scale up if too small
+            min_height = 60
+            w, h = image.size
+            if h < min_height:
+                scale = min_height / h
+                image = image.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+
+            ocr_cfg = "--psm 8 -c tessedit_char_whitelist=AKQJTakqjt0123456789"
+            candidates: list[str] = []
+
+            for variant in (image, ImageOps.invert(image)):
+                t = pytesseract.image_to_string(variant, config=ocr_cfg).strip()
+                if t:
+                    candidates.append(t)
+
+            for text in candidates:
+                cleaned = re.sub(r"[^AKQJTakqjt0-9]", "", text).upper()
+                if cleaned in VALID_RANKS:
+                    return cleaned
+                # Normalise "1O" / "IO" → "10"
+                if cleaned in ("1O", "IO", "10"):
+                    return "10"
+
+            return ""
+    except Exception as e:
+        print(f"Card OCR error for {image_path}: {e}")
+        return ""
+
+
+def build_preflop_hand_rank(left_rank: str, right_rank: str) -> str:
+    """Build a normalized 2-card rank string from two card ranks.
+
+    Examples: A+A -> AA, A+K -> AK, 10+9 -> T9.
+    (Suited/offsuit is not inferred here.)
+    """
+    if not left_rank or not right_rank:
+        return ""
+
+    rank_alias = {"10": "T", "1O": "T", "IO": "T"}
+    l = rank_alias.get(left_rank.upper(), left_rank.upper())
+    r = rank_alias.get(right_rank.upper(), right_rank.upper())
+
+    order = "AKQJT98765432"
+    if l not in order or r not in order:
+        return ""
+
+    if l == r:
+        return f"{l}{r}"
+
+    return f"{l}{r}" if order.index(l) < order.index(r) else f"{r}{l}"
+
+
 def extract_player_info(player_section_path: Path) -> dict[str, str]:
     """Extract player name and pot size from a single player section image.
 
@@ -508,6 +574,31 @@ def organize_player_sections(players_dir: Path, positions: list[str] | None = No
             pot_crop_final = final_pot.crop((0, bottom_start, nps_width, nps_height))
             pot_crop_final.save(position_dir / "pot_size.png")
 
+            # Hero card crops — only for bottom_middle (Pyrex's seat).
+            # Same semantics as action_margins: (left, top, right, bottom).
+            if position == "bottom_middle":
+                hero_left_card_margins = (170, 300, 220, 273)
+                hero_right_card_margins = (270, 295, 120, 280)
+
+                ll, lt, lr, lb = hero_left_card_margins
+                left_card_box = (
+                    max(0, min(int(ll), width - 1)),
+                    max(0, min(int(lt), height - 1)),
+                    max(max(0, min(int(ll), width - 1)) + 1, min(width - int(lr), width)),
+                    max(max(0, min(int(lt), height - 1)) + 1, min(height - int(lb), height)),
+                )
+
+                rl, rt, rr, rb = hero_right_card_margins
+                right_card_box = (
+                    max(0, min(int(rl), width - 1)),
+                    max(0, min(int(rt), height - 1)),
+                    max(max(0, min(int(rl), width - 1)) + 1, min(width - int(rr), width)),
+                    max(max(0, min(int(rt), height - 1)) + 1, min(height - int(rb), height)),
+                )
+
+                img.crop(left_card_box).rotate(-8, expand=True).save(position_dir / "hero_card_left.png")
+                img.crop(right_card_box).rotate(8, expand=True).save(position_dir / "hero_card_right.png")
+
             print(
                 f"Organized {position}: main, name_and_pot_size ({nps_width}x{nps_height}px), "
                 f"middle excluded [{top_end}:{bottom_start}], "
@@ -545,12 +636,28 @@ def extract_player_text(players_dir: Path, position: str) -> dict[str, str | boo
 
     is_dealer = is_dealer_present(player_image, dealer_button_image)
 
+    # Hero card OCR — only for bottom_middle (Pyrex's seat)
+    hero_card_left = ""
+    hero_card_right = ""
+    hand_rank = ""
+    if position == "bottom_middle":
+        left_card_img = position_dir / "hero_card_left.png"
+        right_card_img = position_dir / "hero_card_right.png"
+        if left_card_img.exists():
+            hero_card_left = extract_card_text_from_image(left_card_img)
+        if right_card_img.exists():
+            hero_card_right = extract_card_text_from_image(right_card_img)
+        hand_rank = build_preflop_hand_rank(hero_card_left, hero_card_right)
+
     result = {
         "position": position,
         "name": name_text,
         "pot_size": pot_size_text,
         "action": action_text,
         "is_dealer": is_dealer,
+        "hero_card_left": hero_card_left,
+        "hero_card_right": hero_card_right,
+        "hand_rank": hand_rank,
     }
 
     print(f"{position}:")
@@ -558,8 +665,36 @@ def extract_player_text(players_dir: Path, position: str) -> dict[str, str | boo
     print(f"  Pot Size: {pot_size_text}")
     print(f"  Action: {action_text if action_text else 'No action yet'}")
     print(f"  Dealer: {'YES' if is_dealer else 'NO'}")
+    if position == "bottom_middle":
+        print(f"  Hero cards: {hero_card_left or '?'} | {hero_card_right or '?'}")
+        print(f"  Hand rank: {hand_rank or '?'}")
 
     return result
+
+
+def process_positions_parallel(
+    players_dir: Path,
+    positions: list[str],
+    max_workers: int = 6,
+) -> dict[str, dict[str, str | bool]]:
+    """Organize and extract each player position in parallel.
+
+    This runs the per-position pipeline concurrently:
+    1) organize crops for that position
+    2) OCR extraction for that position
+    """
+
+    def process_one(position: str) -> tuple[str, dict[str, str | bool]]:
+        organize_player_sections(players_dir, positions=[position])
+        return position, extract_player_text(players_dir, position)
+
+    results: dict[str, dict[str, str | bool]] = {}
+    worker_count = max(1, min(max_workers, len(positions)))
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        for position, result in executor.map(process_one, positions):
+            results[position] = result
+
+    return results
 
 
 def assign_table_positions(results: dict[str, dict[str, str | bool]]) -> str | None:
