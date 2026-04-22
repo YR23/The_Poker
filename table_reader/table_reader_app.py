@@ -36,13 +36,87 @@ if st.button("📸 Capture & Analyze Table", use_container_width=True):
     st.session_state["position_warning"] = assign_table_positions(results)
     st.session_state["results"] = results
 
-if MAIN_RIGHT_IMAGE.exists():
-    st.subheader("Captured Main Right")
-    st.image(str(MAIN_RIGHT_IMAGE), use_container_width=True)
 
 if "results" in st.session_state:
     results = st.session_state["results"]
 
+    # ── Hero hand confirmation ────────────────────────────────────────────
+    st.subheader("🃏 Your Hand")
+
+    hero = results.get("bottom_middle", {})
+    detected_left_rank  = hero.get("hero_card_left", "")
+    detected_left_color  = hero.get("hero_card_left_color", "")
+    detected_right_rank = hero.get("hero_card_right", "")
+    detected_right_color = hero.get("hero_card_right_color", "")
+    detected_hand = hero.get("hand_rank", "")
+
+    RANKS  = ["A", "K", "Q", "J", "10", "9", "8", "7", "6", "5", "4", "3", "2"]
+    COLORS = ["red", "green", "blue", "black"]
+
+    def _safe_index(lst, val, fallback=0):
+        try:
+            return lst.index(val)
+        except ValueError:
+            return fallback
+
+    # Seed session state with detected values so dropdowns reflect the detection.
+    # Always update when a fresh capture produces new results.
+    last_detected = st.session_state.get("_last_detected_hand", "")
+    if detected_hand != last_detected:
+        st.session_state["hero_left_rank"]  = detected_left_rank  or RANKS[0]
+        st.session_state["hero_left_color"] = detected_left_color or COLORS[0]
+        st.session_state["hero_right_rank"] = detected_right_rank or RANKS[0]
+        st.session_state["hero_right_color"]= detected_right_color or COLORS[0]
+        st.session_state["_last_detected_hand"] = detected_hand
+
+    col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 2, 2])
+    with col1:
+        left_rank = st.selectbox(
+            "Left rank",
+            options=RANKS,
+            index=_safe_index(RANKS, st.session_state["hero_left_rank"]),
+            key="hero_left_rank",
+        )
+    with col2:
+        left_color = st.selectbox(
+            "Left color",
+            options=COLORS,
+            index=_safe_index(COLORS, st.session_state["hero_left_color"]),
+            key="hero_left_color",
+        )
+    with col3:
+        right_rank = st.selectbox(
+            "Right rank",
+            options=RANKS,
+            index=_safe_index(RANKS, st.session_state["hero_right_rank"]),
+            key="hero_right_rank",
+        )
+    with col4:
+        right_color = st.selectbox(
+            "Right color",
+            options=COLORS,
+            index=_safe_index(COLORS, st.session_state["hero_right_color"]),
+            key="hero_right_color",
+        )
+    with col5:
+        st.write("&nbsp;", unsafe_allow_html=True)  # vertical spacer to align button
+        confirm_clicked = st.button("✅ Confirm Hand", use_container_width=True)
+
+    if confirm_clicked:
+        # Rebuild hand notation from the (possibly corrected) dropdowns
+        from reader_utils import build_preflop_hand_rank
+        confirmed = build_preflop_hand_rank(left_rank, right_rank, left_color, right_color)
+        st.session_state["confirmed_hand"] = confirmed
+        st.session_state["confirmed_hand_parts"] = {
+            "left_rank": left_rank, "left_color": left_color,
+            "right_rank": right_rank, "right_color": right_color,
+        }
+        st.rerun()
+
+    if st.session_state.get("confirmed_hand"):
+        st.success(f"Confirmed hand: **{st.session_state['confirmed_hand']}**")
+
+    st.divider()
     st.subheader("Results")
 
     if st.session_state.get("position_warning"):
@@ -57,9 +131,6 @@ if "results" in st.session_state:
         st.write(f"🧑 `{data.get('name', '') or '—'}`")
         st.write(f"💰 `{data.get('pot_size', '') or '—'}`")
         st.write(f"🃏 `{data.get('action', '') or '—'}`")
-        action_img = PLAYERS_DIR / position / "action.png"
-        if action_img.exists():
-            st.image(str(action_img), width=120)
 
     # Row 1: top_middle in center
     r1 = st.columns(3)

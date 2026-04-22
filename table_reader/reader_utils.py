@@ -326,9 +326,15 @@ def extract_action_text_from_image(image_path: Path) -> str:
                 cleaned = re.sub(r"[^A-Z]", "", text.upper())
                 if cleaned:
                     if cleaned in VALID_ACTIONS:
-                        return "ALL-IN" if cleaned == "ALLIN" else cleaned
+                        action = "ALL-IN" if cleaned == "ALLIN" else cleaned
+                        # SB/BB means waiting for their turn — treat as no action
+                        if action in {"SB", "BB"}:
+                            return ""
+                        return action
                     match = closest_action(cleaned)
                     if match:
+                        if match in {"SB", "BB"}:
+                            return ""
                         return match
 
             return ""
@@ -344,7 +350,7 @@ def extract_card_text_from_image(image_path: Path) -> str:
     Valid values: A K Q J T 2 3 4 5 6 7 8 9 10
     Whitelist is digits + face card letters only.
     """
-    VALID_RANKS = {"A", "K", "Q", "J", "T", "10", "2", "3", "4", "5", "6", "7", "8", "9"}
+    VALID_RANKS = {"A", "K", "Q", "J", "10", "2", "3", "4", "5", "6", "7", "8", "9"}
 
     try:
         with Image.open(image_path) as image:
@@ -358,33 +364,80 @@ def extract_card_text_from_image(image_path: Path) -> str:
                 scale = min_height / h
                 image = image.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
 
-            ocr_cfg = "--psm 8 -c tessedit_char_whitelist=AKQJTakqjt0123456789"
             candidates: list[str] = []
+            ocr_cfgs = [
+                "--psm 8 -c tessedit_char_whitelist=AKQJTakqjt0123456789",
+                "--psm 10 -c tessedit_char_whitelist=AKQJTakqjt0123456789",
+            ]
 
-            for variant in (image, ImageOps.invert(image)):
-                t = pytesseract.image_to_string(variant, config=ocr_cfg).strip()
-                if t:
-                    candidates.append(t)
+            for variant in (image, ImageOps.invert(image), ImageOps.grayscale(image)):
+                for cfg in ocr_cfgs:
+                    t = pytesseract.image_to_string(variant, config=cfg).strip()
+                    if t:
+                        candidates.append(t)
 
-            for text in candidates:
-                cleaned = re.sub(r"[^AKQJTakqjt0-9]", "", text).upper()
-                if cleaned in VALID_RANKS:
-                    return cleaned
-                # Normalise "1O" / "IO" → "10"
-                if cleaned in ("1O", "IO", "10"):
+            def normalize_rank(text: str) -> str:
+                cleaned = re.sub(r"[^AKQJTakqjt0-9IOlo]", "", text).upper()
+
+                # Strong "10" aliases from common OCR confusion.
+                # T alone is also treated as 10 (OCR often reads 10 as T).
+                if cleaned in {"10", "1O", "IO", "LO", "TO", "T0", "O", "0", "1", "T"}:
                     return "10"
 
-            return ""
+                # If both 1-like and 0-like symbols are present, treat as 10.
+                if any(ch in cleaned for ch in "1ILT") and any(ch in cleaned for ch in "0O"):
+                    return "10"
+
+                # Keep only expected rank symbols after alias handling.
+                cleaned = re.sub(r"[^AKQJ0-9]", "", cleaned)
+                return cleaned
+
+            def has_crossbar(img: Image.Image) -> bool:
+                """Return True if a horizontal dark run exists in the middle third of the image.
+
+                'A' has a crossbar; 'J' does not. Works on RGB or grayscale images.
+                """
+                gray = ImageOps.grayscale(img)
+                w, h = gray.size
+                mid_top = h // 3
+                mid_bot = (2 * h) // 3
+                pixels = gray.load()
+                for y in range(mid_top, mid_bot):
+                    run = sum(1 for x in range(w) if pixels[x, y] < 100)
+                    if run >= max(3, w // 4):
+                        return True
+                return False
+
+            for text in candidates:
+                normalized = normalize_rank(text)
+                if normalized in VALID_RANKS:
+                    # Disambiguate A vs J using crossbar detection
+                    if normalized in {"A", "J"}:
+                        if normalized == "A" and not has_crossbar(image):
+                            normalized = "J"
+                        elif normalized == "J" and has_crossbar(image):
+                            normalized = "A"
+                    return normalized
+
+            # No OCR result — assume 10 (most visually complex rank, often missed)
+            return "10"
     except Exception as e:
         print(f"Card OCR error for {image_path}: {e}")
         return ""
 
 
-def build_preflop_hand_rank(left_rank: str, right_rank: str) -> str:
-    """Build a normalized 2-card rank string from two card ranks.
+def build_preflop_hand_rank(
+    left_rank: str,
+    right_rank: str,
+    left_color: str = "",
+    right_color: str = "",
+) -> str:
+    """Build normalized 2-card notation.
 
-    Examples: A+A -> AA, A+K -> AK, 10+9 -> T9.
-    (Suited/offsuit is not inferred here.)
+    Examples:
+    - Pair: AA (no suffix)
+    - Same color: A2s
+    - Different color: A2o
     """
     if not left_rank or not right_rank:
         return ""
@@ -400,7 +453,84 @@ def build_preflop_hand_rank(left_rank: str, right_rank: str) -> str:
     if l == r:
         return f"{l}{r}"
 
-    return f"{l}{r}" if order.index(l) < order.index(r) else f"{r}{l}"
+    hi_lo = f"{l}{r}" if order.index(l) < order.index(r) else f"{r}{l}"
+
+    # Infer suited/offsuit from detected text colors.
+    lc = left_color.lower().strip()
+    rc = right_color.lower().strip()
+    if lc and rc:
+        return f"{hi_lo}s" if lc == rc else f"{hi_lo}o"
+
+    return hi_lo
+
+
+def detect_card_text_color(image_path: Path) -> str:
+    """Detect dominant non-white text color in a card crop.
+
+    Returns one of: red, green, blue, black, or "" when undetermined.
+    """
+    try:
+        with Image.open(image_path) as image:
+            if image.mode != "RGB":
+                image = image.convert("RGB")
+
+            pixels = list(image.getdata())
+
+            # Ignore near-white paper/background.
+            ink_pixels = [
+                (r, g, b)
+                for (r, g, b) in pixels
+                if not (r > 235 and g > 235 and b > 235)
+            ]
+            if not ink_pixels:
+                return ""
+
+            red_count = 0
+            green_count = 0
+            blue_count = 0
+            black_count = 0
+
+            for r, g, b in ink_pixels:
+                mx = max(r, g, b)
+
+                # Dark ink (spade/club style symbols, outlines, text)
+                if mx < 90:
+                    black_count += 1
+                    continue
+
+                # Strong chromatic dominance for colored ink
+                if r > g * 1.25 and r > b * 1.25 and r > 70:
+                    red_count += 1
+                elif g > r * 1.20 and g > b * 1.20 and g > 70:
+                    green_count += 1
+                elif b > r * 1.20 and b > g * 1.20 and b > 70:
+                    blue_count += 1
+
+            # If there is substantial color ink, classify by dominant color.
+            color_counts = {
+                "red": red_count,
+                "green": green_count,
+                "blue": blue_count,
+            }
+            dominant_color = max(color_counts, key=color_counts.get)
+            dominant_count = color_counts[dominant_color]
+            color_total = red_count + green_count + blue_count
+
+            # Trust chromatic signal when enough colored pixels exist and are consistent.
+            if color_total >= 120 and dominant_count / color_total >= 0.60:
+                return dominant_color
+
+            if dominant_count >= 40 and dominant_count > black_count * 0.35:
+                return dominant_color
+
+            # Otherwise default to black if dark ink dominates.
+            if black_count >= 25:
+                return "black"
+
+            return dominant_color if dominant_count > 0 else ""
+    except Exception as e:
+        print(f"Card color detection error for {image_path}: {e}")
+        return ""
 
 
 def extract_player_info(player_section_path: Path) -> dict[str, str]:
@@ -639,15 +769,24 @@ def extract_player_text(players_dir: Path, position: str) -> dict[str, str | boo
     # Hero card OCR — only for bottom_middle (Pyrex's seat)
     hero_card_left = ""
     hero_card_right = ""
+    hero_card_left_color = ""
+    hero_card_right_color = ""
     hand_rank = ""
     if position == "bottom_middle":
         left_card_img = position_dir / "hero_card_left.png"
         right_card_img = position_dir / "hero_card_right.png"
         if left_card_img.exists():
             hero_card_left = extract_card_text_from_image(left_card_img)
+            hero_card_left_color = detect_card_text_color(left_card_img)
         if right_card_img.exists():
             hero_card_right = extract_card_text_from_image(right_card_img)
-        hand_rank = build_preflop_hand_rank(hero_card_left, hero_card_right)
+            hero_card_right_color = detect_card_text_color(right_card_img)
+        hand_rank = build_preflop_hand_rank(
+            hero_card_left,
+            hero_card_right,
+            hero_card_left_color,
+            hero_card_right_color,
+        )
 
     result = {
         "position": position,
@@ -657,6 +796,8 @@ def extract_player_text(players_dir: Path, position: str) -> dict[str, str | boo
         "is_dealer": is_dealer,
         "hero_card_left": hero_card_left,
         "hero_card_right": hero_card_right,
+        "hero_card_left_color": hero_card_left_color,
+        "hero_card_right_color": hero_card_right_color,
         "hand_rank": hand_rank,
     }
 
@@ -667,6 +808,7 @@ def extract_player_text(players_dir: Path, position: str) -> dict[str, str | boo
     print(f"  Dealer: {'YES' if is_dealer else 'NO'}")
     if position == "bottom_middle":
         print(f"  Hero cards: {hero_card_left or '?'} | {hero_card_right or '?'}")
+        print(f"  Hero colors: {hero_card_left_color or '?'} | {hero_card_right_color or '?'}")
         print(f"  Hand rank: {hand_rank or '?'}")
 
     return result
