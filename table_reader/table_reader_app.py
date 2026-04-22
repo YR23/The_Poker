@@ -18,10 +18,16 @@ from reader_utils import (
     process_positions_parallel,
 )
 
+import json
+
 DCIM_DIR = Path(__file__).resolve().parent / "DCIM"
 PLAYERS_DIR = DCIM_DIR / "players"
 SCREEN_IMAGE = DCIM_DIR / "screen.png"
 MAIN_RIGHT_IMAGE = DCIM_DIR / "main_right.png"
+
+_DB_PATH = Path(__file__).resolve().parent.parent / "players_database.json"
+with open(_DB_PATH, "r") as _f:
+    PLAYERS_DB: dict = json.load(_f)
 ALL_POSITIONS = [
     "top_left", "top_middle", "top_right",
     "bottom_left", "bottom_middle", "bottom_right",
@@ -180,15 +186,54 @@ if "results" in st.session_state:
     if st.session_state.get("position_warning"):
         st.warning(st.session_state["position_warning"])
 
+    def classify_player(vpip, pfr):
+        gap = vpip - pfr
+        if vpip >= 35 and pfr >= 25 and gap <= 15:
+            return "Maniac"
+        if vpip >= 25 and pfr >= 18 and gap <= 10:
+            return "LAG"
+        if 17 <= vpip <= 24 and 13 <= pfr <= 20 and gap <= 7:
+            return "TAG"
+        if vpip <= 16 and pfr <= 12:
+            return "NIT"
+        if vpip <= 20 and pfr <= 8 and gap >= 8:
+            return "Tight Passive"
+        if vpip >= 30 and pfr <= 12 and gap >= 12:
+            return "Loose Passive (Calling Station)"
+        if vpip >= 25 and pfr <= 15 and gap >= 10:
+            return "Loose Passive (Fold a lot)"
+        return "Unclassified / Mixed"
+
     def player_card(position: str) -> None:
         data = results.get(position, {})
+        name = data.get('name', '') or ''
+        db_entry = PLAYERS_DB.get(name.strip()) if name.strip() else None
+        in_db = db_entry is not None
+
         st.markdown(f"**{position.replace('_', ' ').title()}**")
-        st.write(f"📍 `{data.get('table_position', '') or '—'}`")
         if data.get("is_dealer", False):
             st.caption("🟠 Dealer")
-        st.write(f"🧑 `{data.get('name', '') or '—'}`")
-        st.write(f"💰 `{data.get('pot_size', '') or '—'}`")
-        st.write(f"🃏 `{data.get('action', '') or '—'}`")
+
+        table_pos = data.get('table_position', '') or '—'
+        pot_size  = data.get('pot_size', '') or '—'
+        action    = data.get('action', '') or '—'
+
+        if in_db:
+            vpip         = db_entry.get("VPIP", 0) or 0
+            pfr          = db_entry.get("PFR", 0) or 0
+            gap          = vpip - pfr
+            three_bet    = db_entry.get("3-BET", "—")
+            fold_to_3bet = db_entry.get("Fold to 3-Bet", "—")
+            player_type  = classify_player(vpip, pfr)
+            st.write(f"📍 `{table_pos}` &nbsp;&nbsp;&nbsp; VPIP: **{vpip}** | PFR: **{pfr}**", unsafe_allow_html=True)
+            st.write(f"🧑 `{name or '—'}` &nbsp;&nbsp;&nbsp; GAP: **{gap}**", unsafe_allow_html=True)
+            st.write(f"💰 `{pot_size}` &nbsp;&nbsp;&nbsp; 3-Bet: **{three_bet}** | Fold to 3-Bet: **{fold_to_3bet}**", unsafe_allow_html=True)
+            st.write(f"🃏 `{action}` &nbsp;&nbsp;&nbsp; Type: **{player_type}**", unsafe_allow_html=True)
+        else:
+            st.write(f"📍 `{table_pos}`")
+            st.write(f"🧑 `{name or '—'}`" + (" &nbsp;&nbsp;&nbsp; ❌ HUD: False" if name.strip() else ""), unsafe_allow_html=True)
+            st.write(f"💰 `{pot_size}`")
+            st.write(f"🃏 `{action}`")
 
     # Row 1: top_middle in center
     r1 = st.columns(3)
@@ -213,3 +258,54 @@ if "results" in st.session_state:
     r4 = st.columns(3)
     with r4[1]:
         player_card("bottom_middle")
+
+# ── Add New Player to Archive ─────────────────────────────────────────────────
+
+PLAYER_FIELDS_DB = ["VPIP", "PFR", "3-BET", "Fold to 3-Bet", "C-BET", "Fold to C-Bet", "Steal", "Check/Raise"]
+
+st.divider()
+st.subheader("Add Player to Archive")
+
+draft_name_key = "new_player_name"
+if draft_name_key not in st.session_state:
+    st.session_state[draft_name_key] = ""
+for field in PLAYER_FIELDS_DB:
+    k = f"new_player_{field}"
+    if k not in st.session_state:
+        st.session_state[k] = ""
+
+if st.session_state.get("_reset_new_player", False):
+    st.session_state[draft_name_key] = ""
+    for field in PLAYER_FIELDS_DB:
+        st.session_state[f"new_player_{field}"] = ""
+    st.session_state["_reset_new_player"] = False
+
+name_col, _ = st.columns([3, 5])
+with name_col:
+    st.text_input("Player Name", key=draft_name_key)
+
+stat_cols = st.columns(len(PLAYER_FIELDS_DB))
+for idx, field in enumerate(PLAYER_FIELDS_DB):
+    with stat_cols[idx]:
+        st.text_input(field, key=f"new_player_{field}")
+
+if st.button("Save to Archive", use_container_width=True):
+    new_name = st.session_state[draft_name_key].strip()
+    if not new_name:
+        st.warning("Player name is required.")
+    else:
+        entry = {}
+        for field in PLAYER_FIELDS_DB:
+            raw = st.session_state[f"new_player_{field}"].strip()
+            try:
+                entry[field] = float(raw) if "." in raw else int(raw)
+            except ValueError:
+                entry[field] = raw
+        PLAYERS_DB[new_name] = entry
+        with open(_DB_PATH, "w") as _out:
+            json.dump(PLAYERS_DB, _out, indent=2)
+        st.success(f"'{new_name}' saved to archive.")
+        st.session_state["_reset_new_player"] = True
+        st.rerun()
+
+

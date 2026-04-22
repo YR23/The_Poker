@@ -13,7 +13,7 @@ if __name__ == "__main__":
 	full_screenshot = dcim_dir / "screen.png"
 
 	# Step 1: Capture fresh screenshot.
-	capture_screen(full_screenshot, display_index=2)
+	# capture_screen(full_screenshot, display_index=2)
 	print(f"Step 1 complete: {full_screenshot}")
 
 	extract_player_sections(dcim_dir)

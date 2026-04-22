@@ -248,5 +248,15 @@
     "Fold to C-Bet": 30,
     "Steal": 49,
     "Check/Raise": 15
+  },
+  "LuckyFox": {
+    "VPIP": 20,
+    "PFR": 20,
+    "3-BET": 20,
+    "Fold to 3-Bet": 20,
+    "C-BET": 20,
+    "Fold to C-Bet": 20,
+    "Steal": 20,
+    "Check/Raise": 20
   }
 }
