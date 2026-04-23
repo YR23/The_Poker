@@ -1,4 +1,70 @@
+
 from __future__ import annotations
+
+
+
+def compare_image_similarity(image_path1: Path, image_path2: Path) -> float:
+    """
+    Compare two images using OpenCV template matching (normalized correlation coefficient).
+    Returns a similarity score between 0 and 1 (higher is more similar).
+    """
+    import cv2
+    import numpy as np
+    img1 = cv2.imread(str(image_path1), cv2.IMREAD_GRAYSCALE)
+    img2 = cv2.imread(str(image_path2), cv2.IMREAD_GRAYSCALE)
+    if img1 is None or img2 is None:
+        return 0.0
+    # Resize images to the same size for comparison
+    h, w = img1.shape
+    img2_resized = cv2.resize(img2, (w, h))
+    res = cv2.matchTemplate(img1, img2_resized, cv2.TM_CCOEFF_NORMED)
+    min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
+    return float(max_val)
+
+def street_crop_and_check_status(main_right_path: Path, crop_margins: tuple[int, int, int, int] | None = None) -> tuple[bool, str]:
+    """
+    Crop a region from main_right.png for street (flop) detection, save as street.png,
+    OCR the text, and return (street_status, ocr_text) tuple.
+    crop_margins: (left, top, right, bottom) margins in pixels to crop from each side. If None, use default.
+    keywords: tuple of strings to match for 'flop dealt'.
+    acceptable_chars: string of allowed characters to filter OCR output (default: 'FLOPDEALT/').
+    """
+    from PIL import Image
+    import pytesseract
+    import os
+    import re
+
+    # Default margins (same as hero_left_card_margins or adjust as needed)
+    if crop_margins is None:
+        crop_margins = (550, 500, 550, 600)
+
+    with Image.open(main_right_path) as img:
+        width, height = img.size
+        ll, lt, lr, lb = crop_margins
+        left = max(0, min(int(ll), width - 1))
+        top = max(0, min(int(lt), height - 1))
+        right = max(left + 1, min(width - int(lr), width))
+        bottom = max(top + 1, min(height - int(lb), height))
+        crop_box = (left, top, right, bottom)
+        cropped = img.crop(crop_box)
+        # Save cropped image as street.png in the same directory as main_right_path
+        street_path = os.path.join(os.path.dirname(main_right_path), "street.png")
+        cropped.save(street_path)
+
+        # --- Compare similarity to preflop.png ---
+        preflop_path = os.path.join(os.path.dirname(main_right_path), "preflop.png")
+        from pathlib import Path
+        similarity = 0.0
+        if os.path.exists(preflop_path):
+            similarity = compare_image_similarity(Path(street_path), Path(preflop_path))
+            print(f"[DEBUG] Similarity to preflop.png: {similarity:.3f}")
+        else:
+            print(f"[DEBUG] preflop.png not found at {preflop_path}")
+
+        if similarity > 0.9:
+            return "Preflop"
+        else:
+            return "Postflop"
 
 from concurrent.futures import ThreadPoolExecutor
 import platform

@@ -4,7 +4,8 @@ from reader_utils import (
 	capture_screen,
 	extract_player_sections,
 	process_positions_parallel,
-	button_crop_and_check_turn
+	button_crop_and_check_turn,
+	street_crop_and_check_status
 )
 
 
@@ -18,12 +19,18 @@ if __name__ == "__main__":
 
 	extract_player_sections(dcim_dir)
 
+
 	# After main_right is cropped, crop the button and check turn (no saving needed)
 	main_right = dcim_dir / "main_right.png"
 	turn_status = button_crop_and_check_turn(main_right)
 	print(f"{'My turn' if turn_status else 'Not my turn'} detected based on button OCR.")
 	print(f"Step X: Button crop/turn status: {turn_status}")
 
+	# New: Crop/check for street (flop) status, using dedicated function
+	street_text = street_crop_and_check_status(main_right)
+	print(f"Flop status detected based on street OCR: {street_text}")
+
+	hello()
 	# Step 6: Process per-position pipeline in parallel (organize + OCR).
 	players_dir = dcim_dir / "players"
 	print("\nStep 6: Parallel per-position processing...")

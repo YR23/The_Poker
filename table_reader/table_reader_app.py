@@ -59,44 +59,96 @@ ALL_POSITIONS = [
 st.set_page_config(page_title="Table Reader", layout="wide")
 st.title("Poker Table Reader")
 
-if st.button("Analyze Current Screen", use_container_width=True):
-    with st.spinner("Capturing screenshot and processing..."):
-        # capture_screen(SCREEN_IMAGE, display_index=2)  # Capture external monitor (disabled temporarily)
+# --- Auto-Capture Until My Turn with Manual Stop (side by side, only one set of buttons) ---
+
+# Ensure unique keys for all auto-capture buttons
+if "auto_capture_running" not in st.session_state:
+    st.session_state["auto_capture_running"] = False
+if "auto_capture_stop" not in st.session_state:
+    st.session_state["auto_capture_stop"] = False
+
+col_auto, col_stop = st.columns([2, 1])
+with col_auto:
+    start_auto = st.button("Auto-Capture Until My Turn", use_container_width=True, key="auto_capture_start_main")
+with col_stop:
+    stop_auto = st.button("Stop Auto-Capture", use_container_width=True, key="auto_capture_stop_btn_main", disabled=not st.session_state["auto_capture_running"])
+
+if start_auto and not st.session_state["auto_capture_running"]:
+    st.session_state["auto_capture_running"] = True
+    st.session_state["auto_capture_stop"] = False
+    st.session_state["session_statuses"] = []  # Reset session captures on new start
+    st.rerun()
+if stop_auto and st.session_state["auto_capture_running"]:
+    st.session_state["auto_capture_stop"] = True
+    st.session_state["auto_capture_running"] = False
+    st.rerun()
+
+if st.session_state.get("auto_capture_running", False):
+    st.warning("Auto-capturing... The app will block until it's your turn or you stop it.")
+    if "session_statuses" not in st.session_state:
+        st.session_state["session_statuses"] = []
+    session_statuses = st.session_state["session_statuses"]
+    while st.session_state.get("auto_capture_running", False):
+        try:
+            capture_screen(SCREEN_IMAGE, display_index=2)
+        except Exception as e:
+            st.error(f"Error capturing screenshot: {e}")
+            st.session_state["auto_capture_running"] = False
+            break
         extract_player_sections(DCIM_DIR)
         results = process_positions_parallel(PLAYERS_DIR, ALL_POSITIONS, max_workers=6)
+        _tracker_state = st.session_state["tracker_state"]
+        changed = False
+        for pos, pdata in results.items():
+            name = (pdata.get("name") or "").strip()
+            action = (pdata.get("action") or "").strip()
+            prev_action = (_tracker_state.get(pos, {}).get("action") or "").strip()
+            if name and action and action != prev_action:
+                changed = True
+        if changed:
+            st.session_state["tracker_state"] = results
+            _tracker_state = results
+        for pos, data in results.items():
+            name = (data.get("name") or "").strip()
+            action = (data.get("action") or "").strip().upper()
+            if not name:
+                continue
+            stats = PLAYER_STATS.setdefault(name, {"hands_seen": 0, "not_folded": 0, "vpip": 0})
+            stats["hands_seen"] += 1
+            if action and action != "FOLD":
+                stats["not_folded"] += 1
+            if action in {"RAISE", "CALL"}:
+                stats["vpip"] += 1
+        with open(_STATS_PATH, "w") as _f:
+            json.dump(PLAYER_STATS, _f, indent=2)
+        st.session_state["position_warning"] = assign_table_positions(results)
+        st.session_state["results"] = results
+        # --- Button OCR --- 
+        turn_status = False
+        ocr_text = ""
+        try:
+            from reader_utils import button_crop_and_check_turn
+            turn_status, ocr_text = button_crop_and_check_turn(MAIN_RIGHT_IMAGE)
+        except Exception as e:
+            st.error(f"Error during button OCR: {e}")
+            st.session_state["auto_capture_running"] = False
+            break
+        session_statuses.append({
+            "turn_status": turn_status,
+            "ocr_text": ocr_text,
+            "results": results,
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+        })
+        st.session_state["session_statuses"] = session_statuses
+        if turn_status is True:
+            st.success("It's your turn! Auto-capture stopped.")
+            st.session_state["auto_capture_running"] = False
+            break
+        if st.session_state.get("auto_capture_stop", False):
+            st.info("Manual stop requested. Auto-capture stopped.")
+            st.session_state["auto_capture_running"] = False
+            break
 
-    # Use tracker state from session
-    _tracker_state = st.session_state["tracker_state"]
-
-    # Auto-tracker logic: compare and update only if action changed
-    changed = False
-    for pos, pdata in results.items():
-        name = (pdata.get("name") or "").strip()
-        action = (pdata.get("action") or "").strip()
-        prev_action = (_tracker_state.get(pos, {}).get("action") or "").strip()
-        if name and action and action != prev_action:
-            changed = True
-    if changed:
-        st.session_state["tracker_state"] = results
-        _tracker_state = results
-
-    # Update player stats
-    for pos, data in results.items():
-        name = (data.get("name") or "").strip()
-        action = (data.get("action") or "").strip().upper()
-        if not name:
-            continue
-        stats = PLAYER_STATS.setdefault(name, {"hands_seen": 0, "not_folded": 0, "vpip": 0})
-        stats["hands_seen"] += 1
-        if action and action != "FOLD":
-            stats["not_folded"] += 1
-        if action in {"RAISE", "CALL"}:
-            stats["vpip"] += 1
-    with open(_STATS_PATH, "w") as _f:
-        json.dump(PLAYER_STATS, _f, indent=2)
-
-    st.session_state["position_warning"] = assign_table_positions(results)
-    st.session_state["results"] = results
 
 
 if "results" in st.session_state:
@@ -174,10 +226,69 @@ if "results" in st.session_state:
             "left_rank": left_rank, "left_color": left_color,
             "right_rank": right_rank, "right_color": right_color,
         }
+        # Start auto-capture after hand confirmation
+        st.session_state["auto_capture_after_confirm"] = True
+        st.session_state["auto_capture_stop"] = False
+        st.session_state["session_statuses_after_confirm"] = []
         st.rerun()
 
     if st.session_state.get("confirmed_hand"):
+
         st.success(f"Confirmed hand: **{st.session_state['confirmed_hand']}**")
+
+        # --- Auto-capture after hand confirmation until street changes or stop pressed ---
+        if st.session_state.get("auto_capture_after_confirm", False):
+            st.warning("Auto-capturing after hand confirmation... Will stop if street changes from preflop or you press stop.")
+            if "session_statuses_after_confirm" not in st.session_state:
+                st.session_state["session_statuses_after_confirm"] = []
+            session_statuses = st.session_state["session_statuses_after_confirm"]
+            col_auto2, col_stop2 = st.columns([2, 1])
+            with col_auto2:
+                st.caption("Auto-capture running...")
+            with col_stop2:
+                stop_auto2 = st.button("Stop Auto-Capture", use_container_width=True, key="auto_capture_stop_btn_after_confirm")
+            if stop_auto2:
+                st.session_state["auto_capture_stop"] = True
+            street_changed = False
+            prev_street = "preflop"
+            while not street_changed and not st.session_state.get("auto_capture_stop", False):
+                try:
+                    capture_screen(SCREEN_IMAGE, display_index=2)
+                except Exception as e:
+                    st.error(f"Error capturing screenshot: {e}")
+                    break
+                extract_player_sections(DCIM_DIR)
+                results = process_positions_parallel(PLAYERS_DIR, ALL_POSITIONS, max_workers=6)
+                # --- Detect street using crop/OCR every time ---
+                try:
+                    from reader_utils import street_crop_and_check_status
+                    street = street_crop_and_check_status(MAIN_RIGHT_IMAGE)
+                    # street_crop_and_check_status returns 'Preflop' or 'Postflop' (case-insensitive)
+                    street = str(street).lower()
+                except Exception as e:
+                    st.error(f"Error during street OCR: {e}")
+                    street = "error"
+                session_statuses.append({
+                    "street": street,
+                    "results": results,
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+                })
+                st.session_state["session_statuses_after_confirm"] = session_statuses
+                st.info(f"Capture {len(session_statuses)}: Street = {street}")
+                if street != "preflop":
+                    street_changed = True
+                    st.success(f"Street changed to {street.title()}! Auto-capture stopped.")
+                    st.session_state["auto_capture_after_confirm"] = False
+                    break
+                if st.session_state.get("auto_capture_stop", False):
+                    st.info("Manual stop requested. Auto-capture stopped.")
+                    st.session_state["auto_capture_after_confirm"] = False
+                    break
+                # Optionally add a short sleep to avoid hammering CPU
+                # time.sleep(1)
+            st.subheader("Session Statuses After Confirm")
+            for idx, entry in enumerate(session_statuses, 1):
+                st.write(f"Capture {idx}: Street = {entry['street']}")
 
     hero_position = str(hero.get("table_position", "")).upper()
     prior_actions = play_engine.infer_prior_actions_from_results(results, hero_seat="bottom_middle")

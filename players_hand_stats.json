@@ -20,9 +20,9 @@
     "vpip": 0
   },
   "Pyrex": {
-    "hands_seen": 46,
-    "not_folded": 0,
-    "vpip": 0
+    "hands_seen": 128,
+    "not_folded": 7,
+    "vpip": 7
   },
   "budaloto": {
     "hands_seen": 9,
@@ -93,5 +93,90 @@
     "hands_seen": 21,
     "not_folded": 1,
     "vpip": 1
+  },
+  "Caccia98": {
+    "hands_seen": 39,
+    "not_folded": 8,
+    "vpip": 8
+  },
+  "pewp3w": {
+    "hands_seen": 39,
+    "not_folded": 2,
+    "vpip": 2
+  },
+  "Arush3540": {
+    "hands_seen": 9,
+    "not_folded": 0,
+    "vpip": 0
+  },
+  "panshi": {
+    "hands_seen": 26,
+    "not_folded": 0,
+    "vpip": 0
+  },
+  "Invincible963": {
+    "hands_seen": 39,
+    "not_folded": 5,
+    "vpip": 5
+  },
+  "jasperjing": {
+    "hands_seen": 30,
+    "not_folded": 2,
+    "vpip": 2
+  },
+  "AndresMos": {
+    "hands_seen": 6,
+    "not_folded": 0,
+    "vpip": 0
+  },
+  "Hans52023472": {
+    "hands_seen": 1,
+    "not_folded": 0,
+    "vpip": 0
+  },
+  "alphacgl": {
+    "hands_seen": 43,
+    "not_folded": 9,
+    "vpip": 9
+  },
+  "Nowwaaa": {
+    "hands_seen": 43,
+    "not_folded": 8,
+    "vpip": 8
+  },
+  "Narkar": {
+    "hands_seen": 43,
+    "not_folded": 2,
+    "vpip": 2
+  },
+  "( VK74VK }": {
+    "hands_seen": 1,
+    "not_folded": 0,
+    "vpip": 0
+  },
+  "ThOma3": {
+    "hands_seen": 35,
+    "not_folded": 1,
+    "vpip": 1
+  },
+  "{ VK74VK }": {
+    "hands_seen": 7,
+    "not_folded": 0,
+    "vpip": 0
+  },
+  "{ VK74VK )": {
+    "hands_seen": 3,
+    "not_folded": 0,
+    "vpip": 0
+  },
+  "ThOma3 )": {
+    "hands_seen": 8,
+    "not_folded": 0,
+    "vpip": 0
+  },
+  "LeoTheRabbit": {
+    "hands_seen": 25,
+    "not_folded": 0,
+    "vpip": 0
   }
 }
