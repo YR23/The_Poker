@@ -5,6 +5,7 @@ import random
 from itertools import combinations
 
 from sim.preflop_engine import (
+    can_players_bet,
     initialize_hand,
     run_flop_round,
     run_preflop_round,
@@ -216,35 +217,71 @@ def _settle_showdown(
     hole_by_position: dict[str, list[tuple[str, str]]],
     board_cards: list[tuple[str, str]],
 ) -> tuple[list[str], dict[str, str], float]:
-    contenders = [p for p in state.players if not p.folded]
-    if not contenders:
+    all_players = state.players
+    contenders = [p for p in all_players if not p.folded]
+    if len(contenders) == 0:
         return ([], {}, 0.0)
 
-    scored: list[tuple[str, str, tuple[int, list[int]]]] = []
+    scored: dict[str, tuple[str, tuple[int, list[int]]]] = {}
     for p in contenders:
         label, score = _best_hand_label_and_score(hole_by_position[p.position], board_cards)
-        scored.append((p.position, label, score))
+        scored[p.position] = (label, score)
 
-    best_score = max(item[2] for item in scored)
-    winner_positions = [pos for pos, _, score in scored if score == best_score]
-    hand_labels = {pos: label for pos, label, _ in scored}
+    contrib_cents = {
+        p.position: int(round(p.total_contribution * 100))
+        for p in all_players
+        if p.total_contribution > 0
+    }
+    levels = sorted(set(contrib_cents.values()))
 
-    total_pot = round(state.pot, 2)
-    if winner_positions:
-        share = round(total_pot / len(winner_positions), 2)
-        distributed = round(share * len(winner_positions), 2)
-        remainder = round(total_pot - distributed, 2)
+    total_pot_cents = sum(contrib_cents.values())
+    awarded_cents = 0
+    winners_seen: set[str] = set()
+    hand_labels = {pos: scored[pos][0] for pos in scored}
 
-        for i, winner_pos in enumerate(winner_positions):
-            bonus = 0.01 if i == 0 and remainder > 0 else 0.0
-            for player in state.players:
+    prev_level = 0
+    for level in levels:
+        delta = level - prev_level
+        if delta <= 0:
+            prev_level = level
+            continue
+
+        contributors = [pos for pos, amount in contrib_cents.items() if amount >= level]
+        pot_slice_cents = delta * len(contributors)
+        if pot_slice_cents <= 0:
+            prev_level = level
+            continue
+
+        eligible = [pos for pos in contributors if pos in scored]
+        if not eligible:
+            prev_level = level
+            continue
+
+        best_score = max(scored[pos][1] for pos in eligible)
+        slice_winners = [pos for pos in eligible if scored[pos][1] == best_score]
+        split = pot_slice_cents // len(slice_winners)
+        remainder = pot_slice_cents % len(slice_winners)
+
+        for i, winner_pos in enumerate(slice_winners):
+            bonus = 1 if i < remainder else 0
+            payout = split + bonus
+            for player in all_players:
                 if player.position == winner_pos:
-                    player.stack = round(player.stack + share + bonus, 2)
+                    player.stack = round(player.stack + (payout / 100.0), 2)
                     break
+            awarded_cents += payout
+            winners_seen.add(winner_pos)
+
+        prev_level = level
 
     state.pot = 0.0
     state.current_bet = 0.0
-    return (winner_positions, hand_labels, total_pot)
+    winner_positions = sorted(
+        list(winners_seen),
+        key=lambda pos: scored[pos][1],
+        reverse=True,
+    )
+    return (winner_positions, hand_labels, total_pot_cents / 100.0)
 
 
 def _print_all_in_no_action_lines(
@@ -274,6 +311,18 @@ def _award_pot_to_winner_if_any(state) -> str | None:
     state.pot = 0.0
     state.current_bet = 0.0
     return str(winner_position)
+
+
+def _summary_with_player_ids(summary: dict, seating: dict[str, str]) -> dict:
+    out = dict(summary)
+    out_players = []
+    for player in summary.get("players", []):
+        player_out = dict(player)
+        position = str(player_out.get("position", ""))
+        player_out["player_id"] = seating.get(position)
+        out_players.append(player_out)
+    out["players"] = out_players
+    return out
 
 
 def _rotate_positions_forward(seating: dict[str, str]) -> dict[str, str]:
@@ -314,13 +363,21 @@ def _play_single_hand(
         big_blind=1.0,
         starting_stacks_by_position=starting_stacks_by_position,
     )
-    hole_cards = _deal_hole_cards([p.position for p in state.players], deck=deck)
+    active_positions_at_start = [p.position for p in state.players if p.stack > 0 and not p.folded]
+    if len(active_positions_at_start) < 2:
+        print("Not enough active players to continue.")
+        print()
+        return
+
+    hole_cards = _deal_hole_cards(active_positions_at_start, deck=deck)
     run_preflop_round(state, seed=None)
     preflop_events = [e for e in state.action_history if e["street"] == "preflop"]
     active_positions_after_preflop = [p.position for p in state.players if not p.folded]
 
     print("Hole cards:")
     for player in state.players:
+        if player.position not in hole_cards:
+            continue
         c1, c2 = hole_cards[player.position]
         shorthand = _format_starting_hand(c1, c2)
         player_id = seating[player.position]
@@ -343,7 +400,7 @@ def _play_single_hand(
         winner_player_id = seating[str(winner)]
         print(f"Hand over: {winner} ({winner_player_id}) wins the pot ({won_amount:.2f})")
         print()
-        print(json.dumps(settled, indent=2))
+        print(json.dumps(_summary_with_player_ids(settled, seating), indent=2))
         for p in state.players:
             stacks_by_player[seating[p.position]] = round(p.stack, 2)
         print()
@@ -381,7 +438,7 @@ def _play_single_hand(
         winner_player_id = seating[str(winner)]
         print(f"Hand over: {winner} ({winner_player_id}) wins the pot ({won_amount:.2f})")
         print()
-        print(json.dumps(settled, indent=2))
+        print(json.dumps(_summary_with_player_ids(settled, seating), indent=2))
         for p in state.players:
             stacks_by_player[seating[p.position]] = round(p.stack, 2)
         print()
@@ -420,7 +477,7 @@ def _play_single_hand(
         winner_player_id = seating[str(winner)]
         print(f"Hand over: {winner} ({winner_player_id}) wins the pot ({won_amount:.2f})")
         print()
-        print(json.dumps(settled, indent=2))
+        print(json.dumps(_summary_with_player_ids(settled, seating), indent=2))
         for p in state.players:
             stacks_by_player[seating[p.position]] = round(p.stack, 2)
         print()
@@ -457,7 +514,7 @@ def _play_single_hand(
         winner_player_id = seating[str(winner)]
         print(f"Hand over: {winner} ({winner_player_id}) wins the pot ({won_amount:.2f})")
         print()
-        print(json.dumps(settled, indent=2))
+        print(json.dumps(_summary_with_player_ids(settled, seating), indent=2))
         for p in state.players:
             stacks_by_player[seating[p.position]] = round(p.stack, 2)
         print()
@@ -479,7 +536,7 @@ def _play_single_hand(
             names = ", ".join([f"{pos} ({seating[pos]})" for pos in winner_positions])
             print(f"Showdown split pot: {names} split {won_amount:.2f}")
     print()
-    print(json.dumps(summarize_hand(state), indent=2))
+    print(json.dumps(_summary_with_player_ids(summarize_hand(state), seating), indent=2))
     for p in state.players:
         stacks_by_player[seating[p.position]] = round(p.stack, 2)
     print()
@@ -492,6 +549,9 @@ def main() -> None:
     _play_single_hand(hand_no=1, seating=seating, stacks_by_player=stacks_by_player)
     seating = _rotate_positions_forward(seating)
     _play_single_hand(hand_no=2, seating=seating, stacks_by_player=stacks_by_player)
+    for hand_no in range(3, 11):
+        seating = _rotate_positions_forward(seating)
+        _play_single_hand(hand_no=hand_no, seating=seating, stacks_by_player=stacks_by_player)
 
 
 if __name__ == "__main__":

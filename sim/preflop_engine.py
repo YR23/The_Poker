@@ -13,6 +13,7 @@ class Player:
     position: str
     stack: float = 100.0
     contribution: float = 0.0
+    total_contribution: float = 0.0
     folded: bool = False
     all_in: bool = False
     has_acted_since_last_raise: bool = False
@@ -73,6 +74,12 @@ def initialize_hand(
     )
     state = HandState(players=players, current_bet=big_blind)
 
+    for p in players:
+        if p.stack <= 0:
+            p.stack = 0.0
+            p.folded = True
+            p.all_in = True
+
     sb = players[4]
     bb = players[5]
     _post_blind(sb, small_blind, state)
@@ -81,9 +88,12 @@ def initialize_hand(
 
 
 def _post_blind(player: Player, amount: float, state: HandState) -> None:
+    if player.folded or player.all_in or player.stack <= 0:
+        return
     posted = min(player.stack, amount)
     player.stack = _round_money(player.stack - posted)
     player.contribution = _round_money(player.contribution + posted)
+    player.total_contribution = _round_money(player.total_contribution + posted)
     state.pot = _round_money(state.pot + posted)
     if player.stack == 0:
         player.all_in = True
@@ -135,6 +145,12 @@ def _flop_raise_targets(player: Player, state: HandState) -> List[float]:
 
 def _is_postflop(street: str) -> bool:
     return street in {"flop", "turn", "river"}
+
+
+def can_players_bet(state: HandState) -> bool:
+    # If fewer than 2 non-folded/non-all-in players remain, no further betting is possible.
+    not_all_in = [p for p in state.players if not p.folded and not p.all_in]
+    return len(not_all_in) >= 2
 
 
 def get_legal_actions(player: Player, state: HandState) -> List[Action]:
@@ -208,6 +224,7 @@ def apply_action(player: Player, action: Action, state: HandState, rng: random.R
         paid = min(player.stack, to_call)
         player.stack = _round_money(player.stack - paid)
         player.contribution = _round_money(player.contribution + paid)
+        player.total_contribution = _round_money(player.total_contribution + paid)
         state.pot = _round_money(state.pot + paid)
         if player.stack == 0:
             player.all_in = True
@@ -237,6 +254,7 @@ def apply_action(player: Player, action: Action, state: HandState, rng: random.R
 
         player.stack = _round_money(player.stack - to_put)
         player.contribution = _round_money(player.contribution + to_put)
+        player.total_contribution = _round_money(player.total_contribution + to_put)
         state.pot = _round_money(state.pot + to_put)
 
         state.current_bet = max(state.current_bet, player.contribution)
@@ -323,6 +341,8 @@ def run_betting_round(
     while True:
         if _single_player_remaining(state):
             break
+        if not can_players_bet(state):
+            break
         if _all_non_folded_matched_or_all_in(state) and _all_non_folded_acted_since_last_raise(state):
             break
 
@@ -384,7 +404,8 @@ def summarize_hand(state: HandState) -> dict:
             {
                 "position": p.position,
                 "stack": _round_money(p.stack),
-                "contribution": _round_money(p.contribution),
+                "street_contribution": _round_money(p.contribution),
+                "hand_contribution": _round_money(p.total_contribution),
                 "status": "folded" if p.folded else ("all-in" if p.all_in else "active"),
             }
             for p in state.players
