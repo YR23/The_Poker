@@ -30,7 +30,16 @@ def test_utg_facing_bb_has_fold_call_raise():
     legal = get_legal_actions(utg, state)
 
     assert _kinds(legal) == {"fold", "call", "raise"}
-    assert min_raise_to(utg, state) == 2.0
+    assert min_raise_to(utg, state) == 3.0
+
+
+def test_raise_size_progression_is_three_x():
+    state = initialize_hand(starting_stack=100.0, small_blind=0.5, big_blind=1.0)
+    utg = state.players[0]
+
+    assert min_raise_to(utg, state) == 3.0
+    state.current_bet = 3.0
+    assert min_raise_to(utg, state) == 9.0
 
 
 def test_bb_can_check_when_unopened():

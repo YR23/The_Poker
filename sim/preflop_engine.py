@@ -29,7 +29,6 @@ class HandState:
     players: List[Player]
     pot: float = 0.0
     current_bet: float = 0.0
-    last_full_raise_size: float = 1.0
     last_aggressor: Optional[str] = None
     button_index: int = 3
     action_history: List[Dict[str, float | str]] = None  # type: ignore[assignment]
@@ -57,7 +56,7 @@ def initialize_hand(
     big_blind: float = 1.0,
 ) -> HandState:
     players = _seat_players(starting_stack=starting_stack)
-    state = HandState(players=players, current_bet=big_blind, last_full_raise_size=big_blind)
+    state = HandState(players=players, current_bet=big_blind)
 
     sb = players[4]
     bb = players[5]
@@ -88,7 +87,10 @@ def amount_to_call(player: Player, state: HandState) -> float:
 
 
 def min_raise_to(player: Player, state: HandState) -> float:
-    return _round_money(state.current_bet + state.last_full_raise_size)
+    del player
+    # Fixed geometric raise sizing: each legal raise is exactly 3x the current bet.
+    # Example: 1 -> 3 -> 9 -> 27
+    return _round_money(state.current_bet * 3)
 
 
 def max_raise_to(player: Player) -> float:
@@ -170,10 +172,7 @@ def apply_action(player: Player, action: Action, state: HandState, rng: random.R
 
     if action.kind == "raise":
         min_to = min_raise_to(player, state)
-        max_to = max_raise_to(player)
-        raise_to = _round_money(rng.uniform(min_to, max_to))
-        raise_to = max(min_to, min(max_to, raise_to))
-        raise_to = _round_money(raise_to)
+        raise_to = min_to
 
         to_put = _round_money(raise_to - player.contribution)
         to_put = min(to_put, player.stack)
@@ -182,11 +181,7 @@ def apply_action(player: Player, action: Action, state: HandState, rng: random.R
         player.contribution = _round_money(player.contribution + to_put)
         state.pot = _round_money(state.pot + to_put)
 
-        previous_bet = state.current_bet
         state.current_bet = max(state.current_bet, player.contribution)
-        full_raise_size = _round_money(state.current_bet - previous_bet)
-        if full_raise_size > 0:
-            state.last_full_raise_size = full_raise_size
 
         state.last_aggressor = player.position
         if player.stack == 0:
