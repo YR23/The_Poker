@@ -30,6 +30,7 @@ class HandState:
     pot: float = 0.0
     current_bet: float = 0.0
     last_aggressor: Optional[str] = None
+    current_street: str = "preflop"
     button_index: int = 3
     action_history: List[Dict[str, float | str]] = None  # type: ignore[assignment]
 
@@ -74,6 +75,7 @@ def _post_blind(player: Player, amount: float, state: HandState) -> None:
         player.all_in = True
     state.action_history.append(
         {
+            "street": state.current_street,
             "position": player.position,
             "action": "post_blind",
             "amount": _round_money(posted),
@@ -97,6 +99,30 @@ def max_raise_to(player: Player) -> float:
     return _round_money(player.contribution + player.stack)
 
 
+def _flop_raise_targets(player: Player, state: HandState) -> List[float]:
+    max_to = max_raise_to(player)
+    to_call = amount_to_call(player, state)
+    targets: List[float] = []
+
+    if to_call == 0:
+        # Flop open-size options: 50% pot or 75% pot.
+        for pct in (0.5, 0.75):
+            target = _round_money(state.pot * pct)
+            if target > player.contribution and target <= max_to and target > state.current_bet:
+                targets.append(target)
+    else:
+        # Facing a flop bet/raise: only 2x from the current bet size.
+        target = _round_money(state.current_bet * 2)
+        if target > player.contribution and target <= max_to:
+            targets.append(target)
+
+    return sorted(set(targets))
+
+
+def _is_postflop(street: str) -> bool:
+    return street in {"flop", "turn", "river"}
+
+
 def get_legal_actions(player: Player, state: HandState) -> List[Action]:
     if player.folded or player.all_in:
         return []
@@ -107,10 +133,15 @@ def get_legal_actions(player: Player, state: HandState) -> List[Action]:
     max_to = max_raise_to(player)
 
     if to_call == 0:
+        actions.append(Action("fold"))
         actions.append(Action("check"))
-        min_to = min_raise_to(player, state)
-        if max_to >= min_to:
-            actions.append(Action("raise", min_to))
+        if _is_postflop(state.current_street):
+            for target in _flop_raise_targets(player, state):
+                actions.append(Action("raise", target))
+        else:
+            min_to = min_raise_to(player, state)
+            if max_to >= min_to:
+                actions.append(Action("raise", min_to))
     else:
         actions.append(Action("fold"))
         if can_cover_call:
@@ -118,9 +149,14 @@ def get_legal_actions(player: Player, state: HandState) -> List[Action]:
         else:
             actions.append(Action("call"))
 
-        min_to = min_raise_to(player, state)
-        if max_to >= min_to and player.stack > to_call:
-            actions.append(Action("raise", min_to))
+        if _is_postflop(state.current_street):
+            for target in _flop_raise_targets(player, state):
+                if player.stack > to_call:
+                    actions.append(Action("raise", target))
+        else:
+            min_to = min_raise_to(player, state)
+            if max_to >= min_to and player.stack > to_call:
+                actions.append(Action("raise", min_to))
 
     return actions
 
@@ -131,6 +167,7 @@ def apply_action(player: Player, action: Action, state: HandState, rng: random.R
         player.has_acted_since_last_raise = True
         state.action_history.append(
             {
+                "street": state.current_street,
                 "position": player.position,
                 "action": "fold",
                 "amount": 0.0,
@@ -143,6 +180,7 @@ def apply_action(player: Player, action: Action, state: HandState, rng: random.R
         player.has_acted_since_last_raise = True
         state.action_history.append(
             {
+                "street": state.current_street,
                 "position": player.position,
                 "action": "check",
                 "amount": 0.0,
@@ -162,6 +200,7 @@ def apply_action(player: Player, action: Action, state: HandState, rng: random.R
         player.has_acted_since_last_raise = True
         state.action_history.append(
             {
+                "street": state.current_street,
                 "position": player.position,
                 "action": "call",
                 "amount": _round_money(paid),
@@ -171,8 +210,13 @@ def apply_action(player: Player, action: Action, state: HandState, rng: random.R
         return
 
     if action.kind == "raise":
-        min_to = min_raise_to(player, state)
-        raise_to = min_to
+        if action.amount is None:
+            raise_to = min_raise_to(player, state)
+        else:
+            raise_to = _round_money(action.amount)
+        max_to = max_raise_to(player)
+        raise_to = max(player.contribution, min(raise_to, max_to))
+        raise_to = _round_money(raise_to)
 
         to_put = _round_money(raise_to - player.contribution)
         to_put = min(to_put, player.stack)
@@ -193,6 +237,7 @@ def apply_action(player: Player, action: Action, state: HandState, rng: random.R
         player.has_acted_since_last_raise = True
         state.action_history.append(
             {
+                "street": state.current_street,
                 "position": player.position,
                 "action": "raise_to",
                 "amount": _round_money(state.current_bet),
@@ -237,12 +282,28 @@ def _preflop_action_order() -> List[int]:
     return [0, 1, 2, 3, 4, 5]
 
 
-def run_preflop_round(
+def _flop_action_order() -> List[int]:
+    return [4, 5, 0, 1, 2, 3]
+
+
+def prepare_new_street(state: HandState, street: str) -> None:
+    state.current_street = street
+    state.current_bet = 0.0
+    for p in state.players:
+        p.contribution = 0.0
+        if not p.folded and not p.all_in:
+            p.has_acted_since_last_raise = False
+
+
+def run_betting_round(
     state: HandState,
+    order: List[int],
     seed: Optional[int] = None,
 ) -> HandState:
     rng = random.Random(seed)
-    order = _preflop_action_order()
+    for p in state.players:
+        if not p.folded and not p.all_in:
+            p.has_acted_since_last_raise = False
     i = 0
 
     while True:
@@ -263,14 +324,48 @@ def run_preflop_round(
     return state
 
 
+def run_preflop_round(
+    state: HandState,
+    seed: Optional[int] = None,
+) -> HandState:
+    state.current_street = "preflop"
+    return run_betting_round(state, order=_preflop_action_order(), seed=seed)
+
+
+def run_flop_round(
+    state: HandState,
+    seed: Optional[int] = None,
+) -> HandState:
+    prepare_new_street(state, street="flop")
+    return run_betting_round(state, order=_flop_action_order(), seed=seed)
+
+
+def run_turn_round(
+    state: HandState,
+    seed: Optional[int] = None,
+) -> HandState:
+    prepare_new_street(state, street="turn")
+    return run_betting_round(state, order=_flop_action_order(), seed=seed)
+
+
+def run_river_round(
+    state: HandState,
+    seed: Optional[int] = None,
+) -> HandState:
+    prepare_new_street(state, street="river")
+    return run_betting_round(state, order=_flop_action_order(), seed=seed)
+
+
 def summarize_hand(state: HandState) -> dict:
     live_players = [p for p in state.players if not p.folded]
     ended_by_folds = len(live_players) == 1
+    winner_position = live_players[0].position if ended_by_folds else None
     return {
         "pot": _round_money(state.pot),
         "current_bet": _round_money(state.current_bet),
         "last_aggressor": state.last_aggressor,
         "ended_by_folds": ended_by_folds,
+        "winner_position": winner_position,
         "players": [
             {
                 "position": p.position,
