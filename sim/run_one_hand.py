@@ -193,6 +193,72 @@ def _print_action_log(action_history: list[dict[str, float | str]]) -> None:
         )
 
 
+def _best_hand_label_and_score(
+    hole_cards: list[tuple[str, str]], board_cards: list[tuple[str, str]]
+) -> tuple[str, tuple[int, list[int]]]:
+    all_cards = hole_cards + board_cards
+    if len(all_cards) == 5:
+        return _classify_five_card_hand_with_score(all_cards, hole_cards)
+
+    best_label = "High Card 2"
+    best_score: tuple[int, list[int]] = (-1, [])
+    for combo in combinations(all_cards, 5):
+        label, score = _classify_five_card_hand_with_score(list(combo), hole_cards)
+        if score > best_score:
+            best_score = score
+            best_label = label
+    return best_label, best_score
+
+
+def _settle_showdown(
+    state,
+    seating: dict[str, str],
+    hole_by_position: dict[str, list[tuple[str, str]]],
+    board_cards: list[tuple[str, str]],
+) -> tuple[list[str], dict[str, str], float]:
+    contenders = [p for p in state.players if not p.folded]
+    if not contenders:
+        return ([], {}, 0.0)
+
+    scored: list[tuple[str, str, tuple[int, list[int]]]] = []
+    for p in contenders:
+        label, score = _best_hand_label_and_score(hole_by_position[p.position], board_cards)
+        scored.append((p.position, label, score))
+
+    best_score = max(item[2] for item in scored)
+    winner_positions = [pos for pos, _, score in scored if score == best_score]
+    hand_labels = {pos: label for pos, label, _ in scored}
+
+    total_pot = round(state.pot, 2)
+    if winner_positions:
+        share = round(total_pot / len(winner_positions), 2)
+        distributed = round(share * len(winner_positions), 2)
+        remainder = round(total_pot - distributed, 2)
+
+        for i, winner_pos in enumerate(winner_positions):
+            bonus = 0.01 if i == 0 and remainder > 0 else 0.0
+            for player in state.players:
+                if player.position == winner_pos:
+                    player.stack = round(player.stack + share + bonus, 2)
+                    break
+
+    state.pot = 0.0
+    state.current_bet = 0.0
+    return (winner_positions, hand_labels, total_pot)
+
+
+def _print_all_in_no_action_lines(
+    street: str,
+    positions_in_street: list[str],
+    state,
+    seating: dict[str, str],
+) -> None:
+    for position in positions_in_street:
+        player = next(p for p in state.players if p.position == position)
+        if player.all_in and not player.folded:
+            print(f"-- [{street}] {position} ({seating[position]}): all-in (no action)")
+
+
 def _award_pot_to_winner_if_any(state) -> str | None:
     summary = summarize_hand(state)
     winner_position = summary["winner_position"]
@@ -300,6 +366,12 @@ def _play_single_hand(
 
     print("Flop actions (active players only):")
     _print_action_log(flop_events)
+    _print_all_in_no_action_lines(
+        street="flop",
+        positions_in_street=active_positions_after_preflop,
+        state=state,
+        seating=seating,
+    )
     print()
     summary = summarize_hand(state)
     if summary["winner_position"] is not None:
@@ -333,6 +405,12 @@ def _play_single_hand(
 
     print("Turn actions (active players only):")
     _print_action_log(turn_events)
+    _print_all_in_no_action_lines(
+        street="turn",
+        positions_in_street=active_positions_after_flop,
+        state=state,
+        seating=seating,
+    )
     print()
     summary = summarize_hand(state)
     if summary["winner_position"] is not None:
@@ -364,6 +442,12 @@ def _play_single_hand(
 
     print("River actions (active players only):")
     _print_action_log(river_events)
+    _print_all_in_no_action_lines(
+        street="river",
+        positions_in_street=active_positions_after_turn,
+        state=state,
+        seating=seating,
+    )
     print()
     summary = summarize_hand(state)
     if summary["winner_position"] is not None:
@@ -378,7 +462,24 @@ def _play_single_hand(
             stacks_by_player[seating[p.position]] = round(p.stack, 2)
         print()
         return
-    print(json.dumps(summary, indent=2))
+    winner_positions, hand_labels, won_amount = _settle_showdown(
+        state=state,
+        seating=seating,
+        hole_by_position=hole_cards,
+        board_cards=board_river,
+    )
+    if winner_positions:
+        if len(winner_positions) == 1:
+            winner = winner_positions[0]
+            print(
+                f"Showdown winner: {winner} ({seating[winner]}) with {hand_labels[winner]} "
+                f"wins {won_amount:.2f}"
+            )
+        else:
+            names = ", ".join([f"{pos} ({seating[pos]})" for pos in winner_positions])
+            print(f"Showdown split pot: {names} split {won_amount:.2f}")
+    print()
+    print(json.dumps(summarize_hand(state), indent=2))
     for p in state.players:
         stacks_by_player[seating[p.position]] = round(p.stack, 2)
     print()
