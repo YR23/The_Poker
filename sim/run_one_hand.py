@@ -17,6 +17,8 @@ from sim.preflop_engine import (
 RANKS = "23456789TJQKA"
 RANK_ORDER = {r: i for i, r in enumerate(RANKS)}
 COLORS = ["black", "red", "blue", "green"]
+POSITIONS = ["UTG", "MP", "CO", "BTN", "SB", "BB"]
+PLAYER_IDS = ["P1", "P2", "P3", "P4", "P5", "P6"]
 
 
 def _build_deck() -> list[tuple[str, str]]:
@@ -208,12 +210,44 @@ def _award_pot_to_winner_if_any(state) -> str | None:
     return str(winner_position)
 
 
-def main() -> None:
+def _rotate_positions_forward(seating: dict[str, str]) -> dict[str, str]:
+    # User-requested shift: UTG -> BB, MP -> UTG, ..., BB -> SB
+    rotated: dict[str, str] = {}
+    for idx, position in enumerate(POSITIONS):
+        target_position = POSITIONS[idx - 1]
+        rotated[target_position] = seating[position]
+    return rotated
+
+
+def _print_stacks_by_position(seating: dict[str, str], stacks_by_player: dict[str, float]) -> None:
+    print("Stacks by position:")
+    for position in POSITIONS:
+        player_id = seating[position]
+        print(f"- {position} ({player_id}): {stacks_by_player[player_id]:.2f}")
+    print()
+
+
+def _play_single_hand(
+    hand_no: int,
+    seating: dict[str, str],
+    stacks_by_player: dict[str, float],
+) -> None:
     rng = random.Random()
     deck = _build_deck()
     rng.shuffle(deck)
-    
-    state = initialize_hand(starting_stack=100.0, small_blind=0.5, big_blind=1.0)
+
+    print(f"=== Hand {hand_no} ===")
+    _print_stacks_by_position(seating, stacks_by_player)
+
+    starting_stacks_by_position = {
+        position: stacks_by_player[seating[position]] for position in POSITIONS
+    }
+    state = initialize_hand(
+        starting_stack=100.0,
+        small_blind=0.5,
+        big_blind=1.0,
+        starting_stacks_by_position=starting_stacks_by_position,
+    )
     hole_cards = _deal_hole_cards([p.position for p in state.players], deck=deck)
     run_preflop_round(state, seed=None)
     preflop_events = [e for e in state.action_history if e["street"] == "preflop"]
@@ -223,8 +257,9 @@ def main() -> None:
     for player in state.players:
         c1, c2 = hole_cards[player.position]
         shorthand = _format_starting_hand(c1, c2)
+        player_id = seating[player.position]
         print(
-            f"- {player.position}: "
+            f"- {player.position} ({player_id}): "
             f"{c1[0]}-{c1[1]} {c2[0]}-{c2[1]} "
             f"({shorthand})"
         )
@@ -239,9 +274,13 @@ def main() -> None:
         winner = _award_pot_to_winner_if_any(state)
         settled = summarize_hand(state)
         won_amount = float(summary["pot"])
-        print(f"Hand over: {winner} wins the pot ({won_amount:.2f})")
+        winner_player_id = seating[str(winner)]
+        print(f"Hand over: {winner} ({winner_player_id}) wins the pot ({won_amount:.2f})")
         print()
         print(json.dumps(settled, indent=2))
+        for p in state.players:
+            stacks_by_player[seating[p.position]] = round(p.stack, 2)
+        print()
         return
 
     flop_cards = _deal_flop(deck)
@@ -255,7 +294,8 @@ def main() -> None:
         if player.position not in active_positions_after_preflop:
             continue
         hand_type = _classify_flop_hand(hole_cards[player.position], flop_cards)
-        print(f"- {player.position}: {hand_type}")
+        player_id = seating[player.position]
+        print(f"- {player.position} ({player_id}): {hand_type}")
     print()
 
     print("Flop actions (active players only):")
@@ -266,9 +306,13 @@ def main() -> None:
         winner = _award_pot_to_winner_if_any(state)
         settled = summarize_hand(state)
         won_amount = float(summary["pot"])
-        print(f"Hand over: {winner} wins the pot ({won_amount:.2f})")
+        winner_player_id = seating[str(winner)]
+        print(f"Hand over: {winner} ({winner_player_id}) wins the pot ({won_amount:.2f})")
         print()
         print(json.dumps(settled, indent=2))
+        for p in state.players:
+            stacks_by_player[seating[p.position]] = round(p.stack, 2)
+        print()
         return
 
     turn_card = _deal_turn_or_river(deck)
@@ -283,7 +327,8 @@ def main() -> None:
         if player.position not in active_positions_after_flop:
             continue
         hand_type = _classify_flop_hand(hole_cards[player.position], board_turn)
-        print(f"- {player.position}: {hand_type}")
+        player_id = seating[player.position]
+        print(f"- {player.position} ({player_id}): {hand_type}")
     print()
 
     print("Turn actions (active players only):")
@@ -294,24 +339,27 @@ def main() -> None:
         winner = _award_pot_to_winner_if_any(state)
         settled = summarize_hand(state)
         won_amount = float(summary["pot"])
-        print(f"Hand over: {winner} wins the pot ({won_amount:.2f})")
+        winner_player_id = seating[str(winner)]
+        print(f"Hand over: {winner} ({winner_player_id}) wins the pot ({won_amount:.2f})")
         print()
         print(json.dumps(settled, indent=2))
+        for p in state.players:
+            stacks_by_player[seating[p.position]] = round(p.stack, 2)
+        print()
         return
 
     river_card = _deal_turn_or_river(deck)
     board_river = board_turn + [river_card]
     run_river_round(state, seed=None)
     river_events = [e for e in state.action_history if e["street"] == "river"]
-    active_positions_after_river = [p.position for p in state.players if not p.folded]
-
     print(f"Board (Flop + Turn + River): {_format_cards(board_river)}")
     print("River hands status (active players):")
     for player in state.players:
         if player.position not in active_positions_after_turn:
             continue
         hand_type = _classify_flop_hand(hole_cards[player.position], board_river)
-        print(f"- {player.position}: {hand_type}")
+        player_id = seating[player.position]
+        print(f"- {player.position} ({player_id}): {hand_type}")
     print()
 
     print("River actions (active players only):")
@@ -322,11 +370,27 @@ def main() -> None:
         winner = _award_pot_to_winner_if_any(state)
         settled = summarize_hand(state)
         won_amount = float(summary["pot"])
-        print(f"Hand over: {winner} wins the pot ({won_amount:.2f})")
+        winner_player_id = seating[str(winner)]
+        print(f"Hand over: {winner} ({winner_player_id}) wins the pot ({won_amount:.2f})")
         print()
         print(json.dumps(settled, indent=2))
+        for p in state.players:
+            stacks_by_player[seating[p.position]] = round(p.stack, 2)
+        print()
         return
     print(json.dumps(summary, indent=2))
+    for p in state.players:
+        stacks_by_player[seating[p.position]] = round(p.stack, 2)
+    print()
+
+
+def main() -> None:
+    seating = {position: player_id for position, player_id in zip(POSITIONS, PLAYER_IDS)}
+    stacks_by_player = {player_id: 100.0 for player_id in PLAYER_IDS}
+
+    _play_single_hand(hand_no=1, seating=seating, stacks_by_player=stacks_by_player)
+    seating = _rotate_positions_forward(seating)
+    _play_single_hand(hand_no=2, seating=seating, stacks_by_player=stacks_by_player)
 
 
 if __name__ == "__main__":

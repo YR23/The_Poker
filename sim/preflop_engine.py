@@ -47,16 +47,30 @@ def _round_money(value: float) -> float:
     return round(value + 1e-9, 2)
 
 
-def _seat_players(starting_stack: float) -> List[Player]:
-    return [Player(position=pos, stack=starting_stack) for pos in POSITIONS]
+def _seat_players(
+    starting_stack: float, starting_stacks_by_position: Optional[Dict[str, float]] = None
+) -> List[Player]:
+    players: List[Player] = []
+    for pos in POSITIONS:
+        stack = (
+            starting_stacks_by_position[pos]
+            if starting_stacks_by_position and pos in starting_stacks_by_position
+            else starting_stack
+        )
+        players.append(Player(position=pos, stack=stack))
+    return players
 
 
 def initialize_hand(
     starting_stack: float = 100.0,
     small_blind: float = 0.5,
     big_blind: float = 1.0,
+    starting_stacks_by_position: Optional[Dict[str, float]] = None,
 ) -> HandState:
-    players = _seat_players(starting_stack=starting_stack)
+    players = _seat_players(
+        starting_stack=starting_stack,
+        starting_stacks_by_position=starting_stacks_by_position,
+    )
     state = HandState(players=players, current_bet=big_blind)
 
     sb = players[4]
