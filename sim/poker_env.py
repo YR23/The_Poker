@@ -104,9 +104,8 @@ class PokerEnv:
         self.deck = _build_deck()
         self.rng.shuffle(self.deck)
 
-        active_positions = [
-            p.position for p in self.state.players if not p.folded and p.stack > 0
-        ]
+        # Deal cards to every non-folded seat, including blind-post all-ins.
+        active_positions = [p.position for p in self.state.players if not p.folded]
         self.hole_cards = _deal_hole_cards(active_positions, self.deck)
 
         self._sync_stacks_from_state()
@@ -142,6 +141,8 @@ class PokerEnv:
             "seating": dict(self.seating),
             "stacks_by_player": dict(self.stacks_by_player),
             "board": list(self.board_cards),
+            "hole_cards": {position: list(cards) for position, cards in self.hole_cards.items()},
+            "action_history": list(self.state.action_history) if self.state is not None else [],
             "summary": summarize_hand(self.state) if self.state is not None else {},
         }
 
