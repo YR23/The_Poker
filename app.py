@@ -1,0 +1,506 @@
+"""Poker hand matrix + flop Monte Carlo equity (treys) — CustomTkinter."""
+
+from __future__ import annotations
+
+import random
+import threading
+import tkinter as tk
+
+import customtkinter as ctk
+
+from chart_range import (
+    chart_path,
+    list_chart_actions,
+    list_positions,
+    list_spots,
+    load_strategy,
+    suggest_villain_action,
+    villain_range_from_chart,
+)
+from card_picker import open_card_picker
+from equity_mc import (
+    combos_from_matrix,
+    expand_range_string,
+    parse_board,
+    parse_hero,
+    run_monte_carlo,
+)
+
+RANKS = ["A", "K", "Q", "J", "T", "9", "8", "7", "6", "5", "4", "3", "2"]
+
+# Dark-theme friendly cycle (idle → fold → call → raise)
+STATE_COLORS = ("#3d3d3d", "#1d4ed8", "#16a34a", "#dc2626")
+STATE_IDLE = 0
+
+
+def hand_label(row: int, col: int) -> str:
+    if row == col:
+        return RANKS[row] + RANKS[col]
+    if row < col:
+        return RANKS[row] + RANKS[col] + "s"
+    return RANKS[col] + RANKS[row] + "o"
+
+
+class HandMatrixApp:
+    def __init__(self) -> None:
+        ctk.set_appearance_mode("dark")
+        ctk.set_default_color_theme("dark-blue")
+
+        self.root = ctk.CTk()
+        self.root.title("The Poker — matrix & equity")
+        self.root.minsize(640, 620)
+
+        self.margin = 32
+        self.cell = 28
+        self.n = 13
+        self._canvas_bg = "#2b2b2b"
+        self._label_fill = "#b0b0b0"
+        self._grid_outline = "#4a4a4a"
+        side = self.margin + self.n * self.cell + 12
+
+        self.state: list[list[int]] = [[0] * self.n for _ in range(self.n)]
+        self.rect_ids: list[list[int]] = [[0] * self.n for _ in range(self.n)]
+
+        self._eq_thread: threading.Thread | None = None
+        self._eq_busy = False
+        self._hero_card_codes: set[str] = set()
+
+        self.root.grid_columnconfigure(0, weight=1)
+        self.root.grid_rowconfigure(1, weight=1)
+
+        header = ctk.CTkFrame(self.root, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="ew", padx=20, pady=(18, 8))
+        ctk.CTkLabel(
+            header,
+            text="The Poker",
+            font=ctk.CTkFont(family="Segoe UI", size=20, weight="bold"),
+        ).pack(anchor="w")
+        ctk.CTkLabel(
+            header,
+            text="Matrix tab: preflop labels · Equity tab: flop all-in to river vs range",
+            font=ctk.CTkFont(family="Segoe UI", size=13),
+            text_color=("gray30", "gray65"),
+        ).pack(anchor="w", pady=(4, 0))
+
+        self.tabview = ctk.CTkTabview(self.root)
+        self.tabview.grid(row=1, column=0, padx=20, pady=(0, 8), sticky="nsew")
+
+        self.tabview.add("Matrix")
+        self.tabview.add("Equity")
+
+        self._build_matrix_tab(side)
+        self._build_equity_tab()
+
+        footer = ctk.CTkFrame(self.root, fg_color="transparent")
+        footer.grid(row=2, column=0, sticky="ew", padx=20, pady=(0, 16))
+        footer.grid_columnconfigure(0, weight=1)
+
+        self.status = ctk.CTkLabel(
+            footer,
+            text="Matrix: click a cell",
+            font=ctk.CTkFont(family="Consolas", size=13),
+            anchor="w",
+        )
+        self.status.grid(row=0, column=0, sticky="ew")
+
+    def _build_matrix_tab(self, side: int) -> None:
+        tab = self.tabview.tab("Matrix")
+        tab.grid_columnconfigure(0, weight=1)
+        tab.grid_rowconfigure(0, weight=1)
+
+        body = ctk.CTkFrame(tab, corner_radius=12, fg_color=("gray92", "gray17"))
+        body.grid(row=0, column=0, sticky="nsew", pady=(0, 12))
+        body.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            tab,
+            text="169 starting hands · click to cycle color · upper = suited · lower = offsuit",
+            font=ctk.CTkFont(family="Segoe UI", size=12),
+            text_color=("gray30", "gray65"),
+        ).grid(row=1, column=0, sticky="w", pady=(0, 4))
+
+        self.canvas = tk.Canvas(
+            body,
+            width=side,
+            height=side,
+            bg=self._canvas_bg,
+            highlightthickness=0,
+            bd=0,
+        )
+        self.canvas.pack(padx=14, pady=14)
+        self.canvas.bind("<Button-1>", self._on_click)
+
+        btn_row = ctk.CTkFrame(tab, fg_color="transparent")
+        btn_row.grid(row=2, column=0, sticky="e", pady=(8, 0))
+        ctk.CTkButton(btn_row, text="Reset grid", width=120, command=self._reset).pack(side="right")
+
+        self._draw_labels()
+        self._draw_cells()
+
+    def _build_equity_tab(self) -> None:
+        tab = self.tabview.tab("Equity")
+        tab.grid_columnconfigure(0, weight=1)
+
+        form = ctk.CTkFrame(tab, corner_radius=12, fg_color=("gray92", "gray17"))
+        form.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        form.grid_columnconfigure(1, weight=1)
+
+        r = 0
+        ctk.CTkLabel(form, text="Your hand (2)").grid(row=r, column=0, padx=12, pady=8, sticky="w")
+        hero_row = ctk.CTkFrame(form, fg_color="transparent")
+        hero_row.grid(row=r, column=1, padx=12, pady=8, sticky="ew")
+        hero_row.grid_columnconfigure(0, weight=1)
+        self._hero_entry = ctk.CTkEntry(hero_row, placeholder_text="AsKh")
+        self._hero_entry.grid(row=0, column=0, sticky="ew")
+        ctk.CTkButton(
+            hero_row,
+            text="Pick cards",
+            width=100,
+            command=self._pick_hero_cards,
+        ).grid(row=0, column=1, padx=(8, 0))
+        r += 1
+
+        ctk.CTkLabel(form, text="Flop (3)").grid(row=r, column=0, padx=12, pady=8, sticky="w")
+        board_row = ctk.CTkFrame(form, fg_color="transparent")
+        board_row.grid(row=r, column=1, padx=12, pady=8, sticky="ew")
+        board_row.grid_columnconfigure(0, weight=1)
+        self._flop_entry = ctk.CTkEntry(board_row, placeholder_text="QdJhTc")
+        self._flop_entry.grid(row=0, column=0, sticky="ew")
+        ctk.CTkButton(
+            board_row,
+            text="Pick cards",
+            width=100,
+            command=self._pick_board_cards,
+        ).grid(row=0, column=1, padx=(8, 0))
+        r += 1
+
+        ctk.CTkLabel(form, text="Villain range").grid(row=r, column=0, padx=12, pady=8, sticky="nw")
+        self._range_entry = ctk.CTkEntry(form, placeholder_text="TT-99, AKs, ATo+ (optional if chart)")
+        self._range_entry.grid(row=r, column=1, padx=12, pady=8, sticky="ew")
+        r += 1
+
+        self._use_chart_var = tk.BooleanVar(value=True)
+        ctk.CTkCheckBox(
+            form,
+            text="Use chart/100bb range",
+            variable=self._use_chart_var,
+            command=self._on_chart_toggle,
+        ).grid(row=r, column=0, columnspan=2, padx=12, pady=(4, 0), sticky="w")
+        r += 1
+
+        chart_row = ctk.CTkFrame(form, fg_color="transparent")
+        chart_row.grid(row=r, column=0, columnspan=2, padx=12, pady=4, sticky="ew")
+        chart_row.grid_columnconfigure(1, weight=1)
+        chart_row.grid_columnconfigure(3, weight=1)
+
+        ctk.CTkLabel(chart_row, text="Position").grid(row=0, column=0, padx=(0, 8), pady=4, sticky="w")
+        positions = list_positions() or ["BB"]
+        self._chart_pos_var = tk.StringVar(value=positions[0])
+        self._chart_pos_menu = ctk.CTkOptionMenu(
+            chart_row,
+            variable=self._chart_pos_var,
+            values=positions,
+            command=self._on_chart_position_changed,
+            width=80,
+        )
+        self._chart_pos_menu.grid(row=0, column=1, padx=(0, 12), pady=4, sticky="ew")
+
+        ctk.CTkLabel(chart_row, text="Spot").grid(row=0, column=2, padx=(0, 8), pady=4, sticky="w")
+        self._chart_spot_var = tk.StringVar(value="")
+        self._chart_spot_menu = ctk.CTkOptionMenu(
+            chart_row,
+            variable=self._chart_spot_var,
+            values=[""],
+            command=self._on_chart_spot_changed,
+        )
+        self._chart_spot_menu.grid(row=0, column=3, pady=4, sticky="ew")
+
+        ctk.CTkLabel(chart_row, text="Action").grid(row=1, column=0, padx=(0, 8), pady=4, sticky="w")
+        self._chart_action_var = tk.StringVar(value="")
+        self._chart_action_menu = ctk.CTkOptionMenu(
+            chart_row,
+            variable=self._chart_action_var,
+            values=[""],
+        )
+        self._chart_action_menu.grid(row=1, column=1, columnspan=3, pady=4, sticky="ew")
+        self._chart_frame = chart_row
+        r += 1
+
+        self._use_matrix_var = tk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            form,
+            text="Use matrix tab as villain range (non-gray cells)",
+            variable=self._use_matrix_var,
+        ).grid(row=r, column=0, columnspan=2, padx=12, pady=4, sticky="w")
+        r += 1
+
+        row_opts = ctk.CTkFrame(form, fg_color="transparent")
+        row_opts.grid(row=r, column=0, columnspan=2, padx=12, pady=8, sticky="w")
+        ctk.CTkLabel(row_opts, text="Trials").pack(side="left", padx=(0, 8))
+        self._trials_entry = ctk.CTkEntry(row_opts, width=100, placeholder_text="5000")
+        self._trials_entry.insert(0, "10000")
+        self._trials_entry.pack(side="left", padx=(0, 16))
+        self._run_btn = ctk.CTkButton(row_opts, text="Run simulation", width=160, command=self._on_run_equity)
+        self._run_btn.pack(side="left")
+
+        help_txt = (
+            "HU all-in to river. Board: 3 cards = random turn/river; 5 cards = fixed. "
+            "Chart: pick position + spot + action (e.g. BB / vs UTG RFI / raise 12.5bb = 3bet range). "
+            "Hand weights from the chart are used when sampling villain combos."
+        )
+        ctk.CTkLabel(
+            tab,
+            text=help_txt,
+            font=ctk.CTkFont(size=11),
+            text_color=("gray30", "gray65"),
+            wraplength=560,
+            justify="left",
+        ).grid(row=1, column=0, sticky="ew", pady=(0, 8))
+
+        out = ctk.CTkFrame(tab, corner_radius=12, fg_color=("gray92", "gray17"))
+        out.grid(row=2, column=0, sticky="ew", pady=(0, 8))
+        out.grid_columnconfigure(0, weight=1)
+
+        self._eq_progress = ctk.CTkLabel(out, text="", font=ctk.CTkFont(family="Consolas", size=12), anchor="w")
+        self._eq_progress.grid(row=0, column=0, padx=12, pady=(10, 4), sticky="ew")
+
+        self._eq_results = ctk.CTkLabel(
+            out,
+            text="Results appear here.",
+            font=ctk.CTkFont(family="Consolas", size=12),
+            anchor="w",
+            justify="left",
+        )
+        self._eq_results.grid(row=1, column=0, padx=12, pady=(4, 12), sticky="ew")
+
+        self._on_chart_position_changed(positions[0])
+
+    def _pick_hero_cards(self) -> None:
+        open_card_picker(
+            self.root,
+            title="Your hand — pick 2 cards",
+            pick_count=2,
+            blocked=set(),
+            initial_text=self._hero_entry.get(),
+            on_confirm=self._on_hero_picked,
+        )
+
+    def _on_hero_picked(self, compact: str) -> None:
+        self._hero_entry.delete(0, "end")
+        self._hero_entry.insert(0, compact)
+        self._hero_card_codes = {compact[i : i + 2].lower() for i in range(0, len(compact), 2)}
+
+    def _hero_blocked_codes(self) -> set[str]:
+        text = self._hero_entry.get().strip()
+        if not text:
+            return set(self._hero_card_codes)
+        try:
+            from card_picker import compact_from_entry
+
+            return {c.lower() for c in compact_from_entry(text, 2)}
+        except ValueError:
+            return set(self._hero_card_codes)
+
+    def _pick_board_cards(self) -> None:
+        open_card_picker(
+            self.root,
+            title="Flop — pick 3 cards",
+            pick_count=3,
+            blocked=self._hero_blocked_codes(),
+            initial_text=self._flop_entry.get(),
+            on_confirm=self._on_board_picked,
+        )
+
+    def _on_board_picked(self, compact: str) -> None:
+        self._flop_entry.delete(0, "end")
+        self._flop_entry.insert(0, compact)
+
+    def _on_chart_toggle(self) -> None:
+        state = "normal" if self._use_chart_var.get() else "disabled"
+        for w in (self._chart_pos_menu, self._chart_spot_menu, self._chart_action_menu):
+            w.configure(state=state)
+
+    def _on_chart_position_changed(self, position: str) -> None:
+        spots = list_spots(position)
+        if not spots:
+            spots = [""]
+        self._chart_spot_menu.configure(values=spots)
+        self._chart_spot_var.set(spots[0])
+        self._on_chart_spot_changed(spots[0])
+
+    def _on_chart_spot_changed(self, spot: str) -> None:
+        if not spot:
+            self._chart_action_menu.configure(values=[""])
+            self._chart_action_var.set("")
+            return
+        position = self._chart_pos_var.get()
+        acts = list_chart_actions(position, spot)
+        if not acts:
+            self._chart_action_menu.configure(values=[""])
+            self._chart_action_var.set("")
+            return
+        suggested = suggest_villain_action(load_strategy(chart_path(position, spot)))
+        default = suggested if suggested in acts else acts[0]
+        self._chart_action_menu.configure(values=acts)
+        self._chart_action_var.set(default)
+
+    def _draw_labels(self) -> None:
+        m, c, n = self.margin, self.cell, self.n
+        for k in range(n):
+            x = m + k * c + c // 2
+            self.canvas.create_text(x, m // 2, text=RANKS[k], fill=self._label_fill, font=("Segoe UI", 10, "bold"))
+            y = m + k * c + c // 2
+            self.canvas.create_text(m // 2, y, text=RANKS[k], fill=self._label_fill, font=("Segoe UI", 10, "bold"))
+
+    def _draw_cells(self) -> None:
+        m, c, n = self.margin, self.cell, self.n
+        for i in range(n):
+            for j in range(n):
+                x0, y0 = m + j * c, m + i * c
+                x1, y1 = x0 + c - 1, y0 + c - 1
+                fill = STATE_COLORS[self.state[i][j]]
+                rid = self.canvas.create_rectangle(
+                    x0, y0, x1, y1, fill=fill, outline=self._grid_outline, width=1
+                )
+                self.rect_ids[i][j] = rid
+
+    def _on_click(self, event: tk.Event) -> None:
+        m, c, n = self.margin, self.cell, self.n
+        if event.x < m or event.y < m:
+            return
+        j = (event.x - m) // c
+        i = (event.y - m) // c
+        if not (0 <= i < n and 0 <= j < n):
+            return
+        self.state[i][j] = (self.state[i][j] + 1) % len(STATE_COLORS)
+        fill = STATE_COLORS[self.state[i][j]]
+        self.canvas.itemconfig(self.rect_ids[i][j], fill=fill)
+        names = ("Idle", "Fold", "Call", "Raise")
+        self.status.configure(text=f"{hand_label(i, j)}  ·  {names[self.state[i][j]]}")
+
+    def _reset(self) -> None:
+        for i in range(self.n):
+            for j in range(self.n):
+                self.state[i][j] = 0
+                self.canvas.itemconfig(self.rect_ids[i][j], fill=STATE_COLORS[0])
+        self.status.configure(text="Grid reset — click a cell")
+
+    def _on_run_equity(self) -> None:
+        if self._eq_busy:
+            return
+        self._eq_busy = True
+        self._run_btn.configure(state="disabled")
+        self._eq_progress.configure(text="Running…")
+        self._eq_results.configure(text="")
+
+        hero_s = self._hero_entry.get().strip()
+        flop_s = self._flop_entry.get().strip()
+        range_s = self._range_entry.get().strip()
+        use_chart = self._use_chart_var.get()
+        use_matrix = self._use_matrix_var.get()
+        try:
+            n_trials = int(self._trials_entry.get().strip())
+        except ValueError:
+            self._eq_finish_error("Trials must be an integer")
+            return
+
+        def task() -> None:
+            try:
+                hero = parse_hero(hero_s)
+                board = parse_board(flop_s)
+                overlap = set(hero) & set(board)
+                if overlap:
+                    raise ValueError("Hero cards overlap with board")
+
+                combo_weights: list[float] | None = None
+                chart_note = ""
+
+                if use_chart:
+                    pos = self._chart_pos_var.get()
+                    spot = self._chart_spot_var.get()
+                    action = self._chart_action_var.get()
+                    if not spot or not action:
+                        raise ValueError("Select chart position, spot, and action")
+                    villain_combos, combo_weights = villain_range_from_chart(
+                        pos, spot, [action]
+                    )
+                    chart_note = f"Chart {pos} / {spot} / {action}\n"
+
+                combos_m: list[tuple[int, int]] = []
+                if use_matrix:
+                    combos_m = combos_from_matrix(self.state, idle_state=STATE_IDLE)
+                combos_t: list[tuple[int, int]] = []
+                if range_s:
+                    combos_t = expand_range_string(range_s)
+
+                if not use_chart:
+                    if use_matrix and range_s:
+                        merged: set[tuple[int, int]] = set(combos_m) | set(combos_t)
+                        villain_combos = list(merged)
+                    elif use_matrix:
+                        villain_combos = combos_m
+                    else:
+                        villain_combos = combos_t
+                elif range_s or use_matrix:
+                    extra: set[tuple[int, int]] = set()
+                    if range_s:
+                        extra |= set(combos_t)
+                    if use_matrix:
+                        extra |= set(combos_m)
+                    villain_combos = list(set(villain_combos) | extra)
+                    combo_weights = None
+
+                if not villain_combos:
+                    raise ValueError(
+                        "Set chart range and/or villain text and/or matrix range"
+                    )
+
+                def prog(done: int, total: int) -> None:
+                    pct = 100.0 * done / total
+                    self.root.after(
+                        0,
+                        lambda d=done, t=total, p=pct: self._eq_progress.configure(
+                            text=f"Progress: {d}/{t} ({p:.0f}%)"
+                        ),
+                    )
+
+                rng = random.Random()
+                result = run_monte_carlo(
+                    hero,
+                    board,
+                    villain_combos,
+                    n_trials,
+                    rng,
+                    progress_callback=prog,
+                    progress_every=max(1, n_trials // 100),
+                    combo_weights=combo_weights,
+                )
+                lines = (
+                    f"{chart_note}"
+                    f"Equity: {100 * result.equity:.2f}%  (±95% ~ {100 * result.margin_of_error_95:.2f}%)\n"
+                    f"Wins {result.wins:,}  Ties {result.ties:,}  Losses {result.losses:,}  (n={result.trials:,})"
+                )
+                self.root.after(0, lambda: self._eq_progress.configure(text="Done."))
+                self.root.after(0, lambda t=lines: self._eq_results.configure(text=t))
+            except Exception as e:
+                self.root.after(0, lambda msg=str(e): self._eq_finish_error(msg))
+            finally:
+                self.root.after(0, self._eq_release)
+
+        self._eq_thread = threading.Thread(target=task, daemon=True)
+        self._eq_thread.start()
+
+    def _eq_finish_error(self, msg: str) -> None:
+        self._eq_progress.configure(text="Error")
+        self._eq_results.configure(text=msg)
+
+    def _eq_release(self) -> None:
+        self._eq_busy = False
+        self._run_btn.configure(state="normal")
+
+    def run(self) -> None:
+        self.root.mainloop()
+
+
+if __name__ == "__main__":
+    HandMatrixApp().run()
