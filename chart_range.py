@@ -1,4 +1,4 @@
-"""Load villain ranges from chart/100bb/{position}/*.json strategy files."""
+"""Load villain ranges from chart/{stack}bb/{position}/*.json strategy files."""
 
 from __future__ import annotations
 
@@ -7,13 +7,20 @@ from pathlib import Path
 
 from equity_mc import expand_range_token
 
-CHART_ROOT = Path(__file__).resolve().parent / "chart" / "100bb"
+CHART_BASE = Path(__file__).resolve().parent / "chart"
+
+# Old default path (100bb); prefer chart_root("100bb") or list_positions(stack_bb=...).
+CHART_ROOT = CHART_BASE / "100bb"
 
 POSITION_ORDER = ("UTG", "MP", "LJ", "HJ", "CO", "BU", "SB", "BB")
 
 DEFAULT_ACTION_ORDER = ("fold", "call", "raise 2.5bb", "raise 12.5bb", "all-in")
 
 PREFERRED_VILLAIN_ACTIONS = ("raise 12.5bb", "raise 2.5bb", "all-in", "call")
+
+
+def chart_root(stack_bb: str) -> Path:
+    return CHART_BASE / stack_bb
 
 
 def parse_weights_blob(blob: str) -> dict[str, float]:
@@ -54,10 +61,11 @@ def load_strategy(path: Path) -> dict[str, dict[str, float]]:
     return strat
 
 
-def list_positions() -> list[str]:
-    if not CHART_ROOT.is_dir():
+def list_positions(stack_bb: str = "100bb") -> list[str]:
+    root = chart_root(stack_bb)
+    if not root.is_dir():
         return []
-    found = [p.name for p in CHART_ROOT.iterdir() if p.is_dir()]
+    found = [p.name for p in root.iterdir() if p.is_dir()]
 
     def sort_key(name: str) -> tuple[int, str]:
         try:
@@ -68,12 +76,12 @@ def list_positions() -> list[str]:
     return sorted(found, key=sort_key)
 
 
-def chart_path(position: str, spot: str) -> Path:
-    return CHART_ROOT / position / f"{spot}.json"
+def chart_path(position: str, spot: str, stack_bb: str = "100bb") -> Path:
+    return chart_root(stack_bb) / position / f"{spot}.json"
 
 
-def list_spots(position: str) -> list[str]:
-    d = CHART_ROOT / position
+def list_spots(position: str, stack_bb: str = "100bb") -> list[str]:
+    d = chart_root(stack_bb) / position
     if not d.is_dir():
         return []
     return sorted(p.stem for p in d.glob("*.json"))
@@ -122,9 +130,10 @@ def villain_range_from_chart(
     actions: list[str],
     *,
     min_weight: float = 0.0,
+    stack_bb: str = "100bb",
 ) -> tuple[list[tuple[int, int]], list[float]]:
     """Expand chart action line(s) to combos with per-combo weights."""
-    path = chart_path(position, spot)
+    path = chart_path(position, spot, stack_bb=stack_bb)
     if not path.is_file():
         raise ValueError(f"Chart not found: {path}")
     strat = load_strategy(path)
@@ -155,8 +164,8 @@ def villain_range_from_chart(
     return combos, weights
 
 
-def list_chart_actions(position: str, spot: str) -> list[str]:
-    path = chart_path(position, spot)
+def list_chart_actions(position: str, spot: str, stack_bb: str = "100bb") -> list[str]:
+    path = chart_path(position, spot, stack_bb=stack_bb)
     if not path.is_file():
         return []
     return actions_with_mass(load_strategy(path))

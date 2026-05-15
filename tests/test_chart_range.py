@@ -45,3 +45,13 @@ def test_actions_with_mass_skips_empty_fold() -> None:
     strat = load_strategy(chart_path("BB", "vs UTG RFI"))
     acts = actions_with_mass(strat)
     assert "fold" not in acts or any(strat["fold"].values())
+
+
+def test_40bb_no_utg_mp_rfi_filename() -> None:
+    assert "UTG" not in list_positions("40bb")
+    assert "MP RFI 19.4%" in list_spots("MP", "40bb")
+
+
+def test_20bb_no_utg_same_layout_as_40bb() -> None:
+    assert "UTG" not in list_positions("20bb")
+    assert list_spots("MP", "20bb") == list_spots("MP", "40bb")

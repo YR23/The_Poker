@@ -182,10 +182,24 @@ class HandMatrixApp:
         self._use_chart_var = tk.BooleanVar(value=True)
         ctk.CTkCheckBox(
             form,
-            text="Use chart/100bb range",
+            text="Use preflop chart range",
             variable=self._use_chart_var,
             command=self._on_chart_toggle,
         ).grid(row=r, column=0, columnspan=2, padx=12, pady=(4, 0), sticky="w")
+        r += 1
+
+        chart_stack_row = ctk.CTkFrame(form, fg_color="transparent")
+        chart_stack_row.grid(row=r, column=0, columnspan=2, padx=12, pady=(2, 0), sticky="w")
+        ctk.CTkLabel(chart_stack_row, text="Stack depth").pack(side="left", padx=(0, 8))
+        self._chart_stack_var = tk.StringVar(value="100bb")
+        self._chart_stack_menu = ctk.CTkOptionMenu(
+            chart_stack_row,
+            variable=self._chart_stack_var,
+            values=("100bb", "40bb", "20bb"),
+            command=self._on_chart_stack_changed,
+            width=90,
+        )
+        self._chart_stack_menu.pack(side="left")
         r += 1
 
         chart_row = ctk.CTkFrame(form, fg_color="transparent")
@@ -194,7 +208,7 @@ class HandMatrixApp:
         chart_row.grid_columnconfigure(3, weight=1)
 
         ctk.CTkLabel(chart_row, text="Position").grid(row=0, column=0, padx=(0, 8), pady=4, sticky="w")
-        positions = list_positions() or ["BB"]
+        positions = list_positions(self._chart_stack_var.get()) or ["BB"]
         self._chart_pos_var = tk.StringVar(value=positions[0])
         self._chart_pos_menu = ctk.CTkOptionMenu(
             chart_row,
@@ -245,7 +259,8 @@ class HandMatrixApp:
 
         help_txt = (
             "HU all-in to river. Board: 3 cards = random turn/river; 5 cards = fixed. "
-            "Chart: pick position + spot + action (e.g. BB / vs UTG RFI / raise 12.5bb = 3bet range). "
+            "Chart: stack depth 100bb / 40bb / 20bb, then position + spot + action. "
+            "40bb and 20bb trees match the short-stack matrix (no UTG). "
             "Hand weights from the chart are used when sampling villain combos."
         )
         ctk.CTkLabel(
@@ -274,6 +289,16 @@ class HandMatrixApp:
         self._eq_results.grid(row=1, column=0, padx=12, pady=(4, 12), sticky="ew")
 
         self._on_chart_position_changed(positions[0])
+
+    def _chart_stack_bb(self) -> str:
+        return self._chart_stack_var.get()
+
+    def _on_chart_stack_changed(self, _value: str) -> None:
+        positions = list_positions(self._chart_stack_bb()) or ["BB"]
+        self._chart_pos_menu.configure(values=positions)
+        if self._chart_pos_var.get() not in positions:
+            self._chart_pos_var.set(positions[0])
+        self._on_chart_position_changed(self._chart_pos_var.get())
 
     def _pick_hero_cards(self) -> None:
         open_card_picker(
@@ -317,11 +342,16 @@ class HandMatrixApp:
 
     def _on_chart_toggle(self) -> None:
         state = "normal" if self._use_chart_var.get() else "disabled"
-        for w in (self._chart_pos_menu, self._chart_spot_menu, self._chart_action_menu):
+        for w in (
+            self._chart_stack_menu,
+            self._chart_pos_menu,
+            self._chart_spot_menu,
+            self._chart_action_menu,
+        ):
             w.configure(state=state)
 
     def _on_chart_position_changed(self, position: str) -> None:
-        spots = list_spots(position)
+        spots = list_spots(position, self._chart_stack_bb())
         if not spots:
             spots = [""]
         self._chart_spot_menu.configure(values=spots)
@@ -334,12 +364,14 @@ class HandMatrixApp:
             self._chart_action_var.set("")
             return
         position = self._chart_pos_var.get()
-        acts = list_chart_actions(position, spot)
+        acts = list_chart_actions(position, spot, self._chart_stack_bb())
         if not acts:
             self._chart_action_menu.configure(values=[""])
             self._chart_action_var.set("")
             return
-        suggested = suggest_villain_action(load_strategy(chart_path(position, spot)))
+        suggested = suggest_villain_action(
+            load_strategy(chart_path(position, spot, stack_bb=self._chart_stack_bb()))
+        )
         default = suggested if suggested in acts else acts[0]
         self._chart_action_menu.configure(values=acts)
         self._chart_action_var.set(default)
@@ -398,6 +430,7 @@ class HandMatrixApp:
         range_s = self._range_entry.get().strip()
         use_chart = self._use_chart_var.get()
         use_matrix = self._use_matrix_var.get()
+        chart_stack_bb = self._chart_stack_bb()
         try:
             n_trials = int(self._trials_entry.get().strip())
         except ValueError:
@@ -422,9 +455,9 @@ class HandMatrixApp:
                     if not spot or not action:
                         raise ValueError("Select chart position, spot, and action")
                     villain_combos, combo_weights = villain_range_from_chart(
-                        pos, spot, [action]
+                        pos, spot, [action], stack_bb=chart_stack_bb
                     )
-                    chart_note = f"Chart {pos} / {spot} / {action}\n"
+                    chart_note = f"Chart ({chart_stack_bb}) {pos} / {spot} / {action}\n"
 
                 combos_m: list[tuple[int, int]] = []
                 if use_matrix:
