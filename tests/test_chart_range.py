@@ -52,6 +52,12 @@ def test_40bb_no_utg_mp_rfi_filename() -> None:
     assert "MP RFI 19.4%" in list_spots("MP", "40bb")
 
 
-def test_20bb_no_utg_same_layout_as_40bb() -> None:
+def test_20bb_no_utg_matches_chart_grid() -> None:
     assert "UTG" not in list_positions("20bb")
-    assert list_spots("MP", "20bb") == list_spots("MP", "40bb")
+    assert "MP RFI 19.1%" in list_spots("MP", "20bb")
+    assert "BU RFI 40.8%" in list_spots("BU", "20bb")
+    assert "vs BU All-in" in list_spots("BB", "20bb")
+    assert "vs BB ISO All-in" in list_spots("SB", "20bb")
+    assert "vs CO All-in" in list_spots("HJ", "20bb")
+    assert len(list_spots("MP", "20bb")) == 12
+    assert len(list_spots("BB", "20bb")) == 9
