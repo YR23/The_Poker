@@ -61,3 +61,14 @@ def test_20bb_no_utg_matches_chart_grid() -> None:
     assert "vs CO All-in" in list_spots("HJ", "20bb")
     assert len(list_spots("MP", "20bb")) == 12
     assert len(list_spots("BB", "20bb")) == 9
+
+
+def test_suggest_villain_action_20bb_prefers_allin() -> None:
+    strat = {
+        "fold": {"72o": 1.0},
+        "call": {},
+        "raise 2.5bb": {},
+        "raise 12.5bb": {"AA": 0.5},
+        "all-in": {"KK": 1.0},
+    }
+    assert suggest_villain_action(strat, stack_bb="20bb") == "all-in"

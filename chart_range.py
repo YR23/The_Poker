@@ -103,11 +103,21 @@ def actions_with_mass(strat: dict[str, dict[str, float]], *, min_weight: float =
     return ordered
 
 
-def suggest_villain_action(strat: dict[str, dict[str, float]]) -> str | None:
+PREFERRED_VILLAIN_ACTIONS_20BB = ("all-in", "raise 12.5bb", "raise 2.5bb", "call")
+
+
+def suggest_villain_action(
+    strat: dict[str, dict[str, float]], *, stack_bb: str | None = None
+) -> str | None:
     acts = actions_with_mass(strat)
     if not acts:
         return None
-    for pref in PREFERRED_VILLAIN_ACTIONS:
+    prefs = (
+        PREFERRED_VILLAIN_ACTIONS_20BB
+        if stack_bb == "20bb"
+        else PREFERRED_VILLAIN_ACTIONS
+    )
+    for pref in prefs:
         if pref in acts:
             return pref
     return acts[0]

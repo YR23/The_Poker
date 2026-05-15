@@ -28,6 +28,8 @@ from equity_mc import (
 
 RANKS = ["A", "K", "Q", "J", "T", "9", "8", "7", "6", "5", "4", "3", "2"]
 
+DEFAULT_CHART_STACK = "20bb"
+
 # Dark-theme friendly cycle (idle → fold → call → raise)
 STATE_COLORS = ("#3d3d3d", "#1d4ed8", "#16a34a", "#dc2626")
 STATE_IDLE = 0
@@ -48,7 +50,7 @@ class HandMatrixApp:
 
         self.root = ctk.CTk()
         self.root.title("The Poker — matrix & equity")
-        self.root.minsize(640, 620)
+        self.root.minsize(720, 640)
 
         self.margin = 32
         self.cell = 28
@@ -77,7 +79,7 @@ class HandMatrixApp:
         ).pack(anchor="w")
         ctk.CTkLabel(
             header,
-            text="Matrix tab: preflop labels · Equity tab: flop all-in to river vs range",
+            text="Matrix tab: preflop labels · Equity: chart/100bb, chart/40bb, chart/20bb (default 20bb)",
             font=ctk.CTkFont(family="Segoe UI", size=13),
             text_color=("gray30", "gray65"),
         ).pack(anchor="w", pady=(4, 0))
@@ -191,11 +193,11 @@ class HandMatrixApp:
         chart_stack_row = ctk.CTkFrame(form, fg_color="transparent")
         chart_stack_row.grid(row=r, column=0, columnspan=2, padx=12, pady=(2, 0), sticky="w")
         ctk.CTkLabel(chart_stack_row, text="Stack depth").pack(side="left", padx=(0, 8))
-        self._chart_stack_var = tk.StringVar(value="100bb")
+        self._chart_stack_var = tk.StringVar(value=DEFAULT_CHART_STACK)
         self._chart_stack_menu = ctk.CTkOptionMenu(
             chart_stack_row,
             variable=self._chart_stack_var,
-            values=("100bb", "40bb", "20bb"),
+            values=("20bb", "40bb", "100bb"),
             command=self._on_chart_stack_changed,
             width=90,
         )
@@ -226,6 +228,7 @@ class HandMatrixApp:
             variable=self._chart_spot_var,
             values=[""],
             command=self._on_chart_spot_changed,
+            width=300,
         )
         self._chart_spot_menu.grid(row=0, column=3, pady=4, sticky="ew")
 
@@ -259,8 +262,8 @@ class HandMatrixApp:
 
         help_txt = (
             "HU all-in to river. Board: 3 cards = random turn/river; 5 cards = fixed. "
-            "Chart: stack depth 100bb / 40bb / 20bb, then position + spot + action. "
-            "40bb and 20bb trees match the short-stack matrix (no UTG). "
+            "Chart: stack 100bb / 40bb / 20bb (default 20bb), then seat, spot, and action. "
+            "20bb favors jam ranges; 40bb/20bb have no UTG. "
             "Hand weights from the chart are used when sampling villain combos."
         )
         ctk.CTkLabel(
@@ -370,7 +373,8 @@ class HandMatrixApp:
             self._chart_action_var.set("")
             return
         suggested = suggest_villain_action(
-            load_strategy(chart_path(position, spot, stack_bb=self._chart_stack_bb()))
+            load_strategy(chart_path(position, spot, stack_bb=self._chart_stack_bb())),
+            stack_bb=self._chart_stack_bb(),
         )
         default = suggested if suggested in acts else acts[0]
         self._chart_action_menu.configure(values=acts)

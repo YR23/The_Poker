@@ -62,9 +62,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument(
         "--chart-stack",
-        default="100bb",
+        default="20bb",
         metavar="Nbb",
-        help="Which chart tree: 100bb, 40bb, or 20bb (default 100bb)",
+        help="Which chart tree: 20bb, 40bb, or 100bb (default 20bb)",
     )
     p.add_argument("--seed", type=int, default=None, help="RNG seed for reproducibility")
     p.add_argument("--trials", type=int, default=10_000, help="Monte Carlo trials (default 10000)")
@@ -111,7 +111,10 @@ def main(argv: list[str] | None = None) -> int:
                 if not avail:
                     raise ValueError("Chart has no weighted actions; pass --chart-action")
                 suggested = suggest_villain_action(
-                    load_strategy(chart_path(args.chart_position, args.chart_spot, stack_bb=stack_bb))
+                    load_strategy(
+                        chart_path(args.chart_position, args.chart_spot, stack_bb=stack_bb)
+                    ),
+                    stack_bb=stack_bb,
                 )
                 actions = [suggested or avail[0]]
             villain, combo_weights = villain_range_from_chart(
