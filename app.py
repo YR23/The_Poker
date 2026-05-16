@@ -1,26 +1,41 @@
-"""Monte Carlo flop equity vs chart/text range — CustomTkinter."""
+"""Monte Carlo flop equity vs chart range — CustomTkinter."""
 
 from __future__ import annotations
 
 import random
+from dataclasses import dataclass
 import threading
 import tkinter as tk
 
 import customtkinter as ctk
 
-from chart_range import (
-    chart_path,
-    list_chart_actions,
-    list_positions,
-    list_spots,
-    load_strategy,
-    suggest_villain_action,
-    villain_range_from_chart,
-)
+from board_secondary_risk import SecondaryRiskInfo, secondary_risk_from_flop_text
+from board_straight_risk import StraightRiskInfo, straight_risk_from_flop_text
+from board_texture import FlopHighInfo, classify_flop_text
 from card_picker import open_card_picker
-from equity_mc import expand_range_string, parse_board, parse_hero, run_monte_carlo
+from chart_range import list_positions
+from equity_mc import parse_board, parse_hero, run_monte_carlo
+from spot_resolve import VILLAIN_PREFLOP_ACTIONS, hero_action_for_villain, villain_range_for_spot
 
 DEFAULT_CHART_STACK = "20bb"
+METRIC_PANEL_BG = "#14532d"
+METRIC_ACCENT = "#86efac"
+METRIC_CARD_WIDTH = 300
+METRIC_CARD_HEIGHT = 104
+SECONDARY_METRIC_CARD_HEIGHT = 132
+METRIC_TEXT_WRAP = METRIC_CARD_WIDTH - 70
+POSITIONS_100 = ("UTG", "MP", "LJ", "HJ", "CO", "BU", "SB", "BB")
+POSITIONS_SHORT = ("MP", "LJ", "HJ", "CO", "BU", "SB", "BB")
+
+
+@dataclass(frozen=True)
+class _MetricCardUi:
+    wrap: ctk.CTkFrame
+    card: ctk.CTkFrame
+    emoji: ctk.CTkLabel
+    title: ctk.CTkLabel
+    value: ctk.CTkLabel
+    sub: ctk.CTkLabel
 
 
 class EquityApp:
@@ -30,11 +45,12 @@ class EquityApp:
 
         self.root = ctk.CTk()
         self.root.title("The Poker — equity")
-        self.root.minsize(720, 640)
+        self.root.minsize(980, 640)
 
         self._eq_thread: threading.Thread | None = None
         self._eq_busy = False
         self._hero_card_codes: set[str] = set()
+        self._auto_run_after_id: str | None = None
 
         self.root.grid_columnconfigure(0, weight=1)
         self.root.grid_rowconfigure(1, weight=1)
@@ -48,7 +64,7 @@ class EquityApp:
         ).pack(anchor="w")
         ctk.CTkLabel(
             header,
-            text="Flop all-in to river vs chart range (20bb / 40bb / 100bb)",
+            text="Set seats & villain action, then pick hand + flop — simulation runs automatically",
             font=ctk.CTkFont(family="Segoe UI", size=13),
             text_color=("gray30", "gray65"),
         ).pack(anchor="w", pady=(4, 0))
@@ -56,136 +72,139 @@ class EquityApp:
         body = ctk.CTkFrame(self.root, fg_color="transparent")
         body.grid(row=1, column=0, padx=20, pady=(0, 8), sticky="nsew")
         body.grid_columnconfigure(0, weight=1)
-        body.grid_rowconfigure(2, weight=1)
+        body.grid_rowconfigure(2, weight=1)  # gap between stats and bottom controls
 
         self._build_equity_form(body)
+
+    def _seat_values(self) -> tuple[str, ...]:
+        if self._chart_stack_bb() == "100bb":
+            return POSITIONS_100
+        return POSITIONS_SHORT
 
     def _build_equity_form(self, parent: ctk.CTkFrame) -> None:
         form = ctk.CTkFrame(parent, corner_radius=12, fg_color=("gray92", "gray17"))
         form.grid(row=0, column=0, sticky="ew", pady=(0, 10))
-        form.grid_columnconfigure(1, weight=1)
+        form.grid_columnconfigure(0, weight=1)
 
-        r = 0
-        ctk.CTkLabel(form, text="Your hand (2)").grid(row=r, column=0, padx=12, pady=8, sticky="w")
-        hero_row = ctk.CTkFrame(form, fg_color="transparent")
-        hero_row.grid(row=r, column=1, padx=12, pady=8, sticky="ew")
+        self._chart_stack_var = tk.StringVar(value=DEFAULT_CHART_STACK)
+
+        top = ctk.CTkFrame(form, fg_color="transparent")
+        top.grid(row=0, column=0, sticky="ew", padx=12, pady=(12, 8))
+        for c in range(8):
+            top.grid_columnconfigure(c, weight=1 if c % 2 == 1 else 0)
+
+        seats = self._seat_values()
+        col = 0
+
+        ctk.CTkLabel(top, text="Hero seat", font=ctk.CTkFont(weight="bold")).grid(
+            row=0, column=col, padx=(0, 6), pady=4, sticky="w"
+        )
+        col += 1
+        self._hero_pos_var = tk.StringVar(value="BB")
+        self._hero_pos_menu = ctk.CTkOptionMenu(
+            top,
+            variable=self._hero_pos_var,
+            values=seats,
+            command=lambda _: self._on_setup_changed(),
+            width=72,
+        )
+        self._hero_pos_menu.grid(row=0, column=col, padx=(0, 12), pady=4, sticky="ew")
+        col += 1
+
+        ctk.CTkLabel(top, text="Villain seat", font=ctk.CTkFont(weight="bold")).grid(
+            row=0, column=col, padx=(0, 6), pady=4, sticky="w"
+        )
+        col += 1
+        self._villain_pos_var = tk.StringVar(value="MP")
+        self._villain_pos_menu = ctk.CTkOptionMenu(
+            top,
+            variable=self._villain_pos_var,
+            values=seats,
+            command=lambda _: self._on_setup_changed(),
+            width=72,
+        )
+        self._villain_pos_menu.grid(row=0, column=col, padx=(0, 12), pady=4, sticky="ew")
+        col += 1
+
+        ctk.CTkLabel(top, text="Villain action", font=ctk.CTkFont(weight="bold")).grid(
+            row=0, column=col, padx=(0, 6), pady=4, sticky="w"
+        )
+        col += 1
+        self._villain_action_var = tk.StringVar(value="RFI")
+        self._villain_action_menu = ctk.CTkOptionMenu(
+            top,
+            variable=self._villain_action_var,
+            values=VILLAIN_PREFLOP_ACTIONS,
+            command=lambda _: self._on_setup_changed(),
+            width=88,
+        )
+        self._villain_action_menu.grid(row=0, column=col, padx=(0, 12), pady=4, sticky="ew")
+        col += 1
+
+        ctk.CTkLabel(top, text="Stack", font=ctk.CTkFont(weight="bold")).grid(
+            row=0, column=col, padx=(0, 6), pady=4, sticky="w"
+        )
+        col += 1
+        self._chart_stack_menu = ctk.CTkOptionMenu(
+            top,
+            variable=self._chart_stack_var,
+            values=("20bb", "40bb", "100bb"),
+            command=self._on_stack_changed,
+            width=80,
+        )
+        self._chart_stack_menu.grid(row=0, column=col, pady=4, sticky="ew")
+
+        self._hero_action_label = ctk.CTkLabel(
+            form,
+            text="",
+            font=ctk.CTkFont(family="Consolas", size=12),
+            anchor="w",
+        )
+        self._hero_action_label.grid(row=1, column=0, padx=12, pady=(0, 4), sticky="ew")
+
+        self._spot_label = ctk.CTkLabel(
+            form,
+            text="",
+            font=ctk.CTkFont(family="Consolas", size=11),
+            text_color=("gray30", "gray60"),
+            anchor="w",
+        )
+        self._spot_label.grid(row=2, column=0, padx=12, pady=(0, 8), sticky="ew")
+
+        cards = ctk.CTkFrame(form, fg_color="transparent")
+        cards.grid(row=3, column=0, sticky="ew", padx=12, pady=(0, 8))
+        cards.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(cards, text="Your hand (2)").grid(row=0, column=0, padx=(0, 8), pady=6, sticky="w")
+        hero_row = ctk.CTkFrame(cards, fg_color="transparent")
+        hero_row.grid(row=0, column=1, pady=6, sticky="ew")
         hero_row.grid_columnconfigure(0, weight=1)
         self._hero_entry = ctk.CTkEntry(hero_row, placeholder_text="AsKh")
         self._hero_entry.grid(row=0, column=0, sticky="ew")
+        self._hero_entry.bind("<KeyRelease>", lambda _e: self._schedule_auto_run())
         ctk.CTkButton(
             hero_row,
             text="Pick cards",
             width=100,
             command=self._pick_hero_cards,
         ).grid(row=0, column=1, padx=(8, 0))
-        r += 1
 
-        ctk.CTkLabel(form, text="Flop (3)").grid(row=r, column=0, padx=12, pady=8, sticky="w")
-        board_row = ctk.CTkFrame(form, fg_color="transparent")
-        board_row.grid(row=r, column=1, padx=12, pady=8, sticky="ew")
+        ctk.CTkLabel(cards, text="Flop (3)").grid(row=1, column=0, padx=(0, 8), pady=6, sticky="w")
+        board_row = ctk.CTkFrame(cards, fg_color="transparent")
+        board_row.grid(row=1, column=1, pady=6, sticky="ew")
         board_row.grid_columnconfigure(0, weight=1)
         self._flop_entry = ctk.CTkEntry(board_row, placeholder_text="QdJhTc")
         self._flop_entry.grid(row=0, column=0, sticky="ew")
+        self._flop_entry.bind("<KeyRelease>", self._on_flop_entry_changed)
         ctk.CTkButton(
             board_row,
             text="Pick cards",
             width=100,
             command=self._pick_board_cards,
         ).grid(row=0, column=1, padx=(8, 0))
-        r += 1
-
-        ctk.CTkLabel(form, text="Villain range").grid(row=r, column=0, padx=12, pady=8, sticky="nw")
-        self._range_entry = ctk.CTkEntry(form, placeholder_text="TT-99, AKs, ATo+ (optional if chart)")
-        self._range_entry.grid(row=r, column=1, padx=12, pady=8, sticky="ew")
-        r += 1
-
-        self._use_chart_var = tk.BooleanVar(value=True)
-        ctk.CTkCheckBox(
-            form,
-            text="Use preflop chart range",
-            variable=self._use_chart_var,
-            command=self._on_chart_toggle,
-        ).grid(row=r, column=0, columnspan=2, padx=12, pady=(4, 0), sticky="w")
-        r += 1
-
-        chart_stack_row = ctk.CTkFrame(form, fg_color="transparent")
-        chart_stack_row.grid(row=r, column=0, columnspan=2, padx=12, pady=(2, 0), sticky="w")
-        ctk.CTkLabel(chart_stack_row, text="Stack depth").pack(side="left", padx=(0, 8))
-        self._chart_stack_var = tk.StringVar(value=DEFAULT_CHART_STACK)
-        self._chart_stack_menu = ctk.CTkOptionMenu(
-            chart_stack_row,
-            variable=self._chart_stack_var,
-            values=("20bb", "40bb", "100bb"),
-            command=self._on_chart_stack_changed,
-            width=90,
-        )
-        self._chart_stack_menu.pack(side="left")
-        r += 1
-
-        chart_row = ctk.CTkFrame(form, fg_color="transparent")
-        chart_row.grid(row=r, column=0, columnspan=2, padx=12, pady=4, sticky="ew")
-        chart_row.grid_columnconfigure(1, weight=1)
-        chart_row.grid_columnconfigure(3, weight=1)
-
-        ctk.CTkLabel(chart_row, text="Position").grid(row=0, column=0, padx=(0, 8), pady=4, sticky="w")
-        positions = list_positions(self._chart_stack_var.get()) or ["BB"]
-        self._chart_pos_var = tk.StringVar(value=positions[0])
-        self._chart_pos_menu = ctk.CTkOptionMenu(
-            chart_row,
-            variable=self._chart_pos_var,
-            values=positions,
-            command=self._on_chart_position_changed,
-            width=80,
-        )
-        self._chart_pos_menu.grid(row=0, column=1, padx=(0, 12), pady=4, sticky="ew")
-
-        ctk.CTkLabel(chart_row, text="Spot").grid(row=0, column=2, padx=(0, 8), pady=4, sticky="w")
-        self._chart_spot_var = tk.StringVar(value="")
-        self._chart_spot_menu = ctk.CTkOptionMenu(
-            chart_row,
-            variable=self._chart_spot_var,
-            values=[""],
-            command=self._on_chart_spot_changed,
-            width=300,
-        )
-        self._chart_spot_menu.grid(row=0, column=3, pady=4, sticky="ew")
-
-        ctk.CTkLabel(chart_row, text="Action").grid(row=1, column=0, padx=(0, 8), pady=4, sticky="w")
-        self._chart_action_var = tk.StringVar(value="")
-        self._chart_action_menu = ctk.CTkOptionMenu(
-            chart_row,
-            variable=self._chart_action_var,
-            values=[""],
-        )
-        self._chart_action_menu.grid(row=1, column=1, columnspan=3, pady=4, sticky="ew")
-        r += 1
-
-        row_opts = ctk.CTkFrame(form, fg_color="transparent")
-        row_opts.grid(row=r, column=0, columnspan=2, padx=12, pady=8, sticky="w")
-        ctk.CTkLabel(row_opts, text="Trials").pack(side="left", padx=(0, 8))
-        self._trials_entry = ctk.CTkEntry(row_opts, width=100, placeholder_text="10000")
-        self._trials_entry.insert(0, "10000")
-        self._trials_entry.pack(side="left", padx=(0, 16))
-        self._run_btn = ctk.CTkButton(row_opts, text="Run simulation", width=160, command=self._on_run_equity)
-        self._run_btn.pack(side="left")
-
-        help_txt = (
-            "HU all-in to river. Board: 3 cards = random turn/river; 5 cards = fixed. "
-            "Chart: stack 100bb / 40bb / 20bb (default 20bb), then seat, spot, and action. "
-            "20bb favors jam ranges; 40bb/20bb have no UTG. "
-            "Hand weights from the chart are used when sampling villain combos."
-        )
-        ctk.CTkLabel(
-            parent,
-            text=help_txt,
-            font=ctk.CTkFont(size=11),
-            text_color=("gray30", "gray65"),
-            wraplength=560,
-            justify="left",
-        ).grid(row=1, column=0, sticky="ew", pady=(0, 8))
 
         out = ctk.CTkFrame(parent, corner_radius=12, fg_color=("gray92", "gray17"))
-        out.grid(row=2, column=0, sticky="ew", pady=(0, 8))
+        out.grid(row=1, column=0, sticky="ew", pady=(0, 8))
         out.grid_columnconfigure(0, weight=1)
 
         self._eq_progress = ctk.CTkLabel(out, text="", font=ctk.CTkFont(family="Consolas", size=12), anchor="w")
@@ -193,24 +212,255 @@ class EquityApp:
 
         self._eq_results = ctk.CTkLabel(
             out,
-            text="Results appear here.",
+            text="Choose seats, villain action, stack, then hand and flop.",
             font=ctk.CTkFont(family="Consolas", size=12),
             anchor="w",
             justify="left",
         )
-        self._eq_results.grid(row=1, column=0, padx=12, pady=(4, 12), sticky="ew")
+        self._eq_results.grid(row=1, column=0, padx=12, pady=(4, 8), sticky="ew")
 
-        self._on_chart_position_changed(positions[0])
+        metric_slot = ctk.CTkFrame(parent, fg_color="transparent")
+        metric_slot.grid(row=2, column=0, sticky="nsew")
+        metric_slot.grid_columnconfigure(0, weight=1)
+        metric_slot.grid_rowconfigure(0, weight=1)
+        metric_slot.grid_rowconfigure(2, weight=1)
+
+        self._metrics_frame = ctk.CTkFrame(metric_slot, fg_color="transparent")
+        self._metrics_frame.grid(row=1, column=0, sticky="w", padx=12)
+        board_ui = self._build_metric_card(self._metrics_frame, "Board texture")
+        self._board_metric_wrap = board_ui.wrap
+        self._board_metric_card = board_ui.card
+        self._board_metric_emoji = board_ui.emoji
+        self._board_metric_title = board_ui.title
+        self._board_metric_value = board_ui.value
+        self._board_metric_sub = board_ui.sub
+
+        straight_ui = self._build_metric_card(self._metrics_frame, "Primary risk")
+        self._straight_metric_wrap = straight_ui.wrap
+        self._straight_metric_card = straight_ui.card
+        self._straight_metric_emoji = straight_ui.emoji
+        self._straight_metric_title = straight_ui.title
+        self._straight_metric_value = straight_ui.value
+        self._straight_metric_sub = straight_ui.sub
+
+        secondary_ui = self._build_metric_card(
+            self._metrics_frame,
+            "Secondary risk",
+            height=SECONDARY_METRIC_CARD_HEIGHT,
+        )
+        self._secondary_metric_wrap = secondary_ui.wrap
+        self._secondary_metric_card = secondary_ui.card
+        self._secondary_metric_emoji = secondary_ui.emoji
+        self._secondary_metric_title = secondary_ui.title
+        self._secondary_metric_value = secondary_ui.value
+        self._secondary_metric_sub = secondary_ui.sub
+
+        self._board_metric_wrap.grid(row=0, column=0, sticky="nsew")
+        self._straight_metric_wrap.grid(row=0, column=1, sticky="nsew", padx=(12, 0))
+        self._secondary_metric_wrap.grid(row=0, column=2, sticky="nsew", padx=(12, 0))
+
+        row_opts = ctk.CTkFrame(parent, fg_color="transparent")
+        row_opts.grid(row=3, column=0, sticky="sw", pady=(0, 8))
+        ctk.CTkLabel(row_opts, text="Trials").pack(side="left", padx=(0, 8))
+        self._trials_entry = ctk.CTkEntry(row_opts, width=100)
+        self._trials_entry.insert(0, "10000")
+        self._trials_entry.pack(side="left", padx=(0, 16))
+        self._run_btn = ctk.CTkButton(row_opts, text="Run again", width=120, command=self._on_run_equity)
+        self._run_btn.pack(side="left")
+
+        self._on_setup_changed()
+        self._update_board_metrics()
+
+    def _build_metric_card(
+        self,
+        parent: ctk.CTkFrame,
+        title: str,
+        *,
+        height: int = METRIC_CARD_HEIGHT,
+    ) -> _MetricCardUi:
+        wrap = ctk.CTkFrame(
+            parent,
+            width=METRIC_CARD_WIDTH,
+            height=height,
+            fg_color="transparent",
+        )
+        wrap.pack_propagate(False)
+
+        card = ctk.CTkFrame(
+            wrap,
+            corner_radius=12,
+            fg_color=METRIC_PANEL_BG,
+            border_width=1,
+            border_color="#166534",
+        )
+        card.pack(fill="both", expand=True)
+
+        inner = ctk.CTkFrame(card, fg_color="transparent")
+        inner.pack(fill="both", expand=True, padx=16, pady=12)
+
+        top = ctk.CTkFrame(inner, fg_color="transparent")
+        top.pack(anchor="nw", fill="x")
+
+        emoji = ctk.CTkLabel(top, text="—", font=ctk.CTkFont(size=22), width=28)
+        emoji.pack(side="left", padx=(0, 10))
+
+        text_col = ctk.CTkFrame(top, fg_color="transparent")
+        text_col.pack(side="left", fill="x", expand=True)
+
+        title_lbl = ctk.CTkLabel(
+            text_col,
+            text=title,
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color=METRIC_ACCENT,
+            anchor="w",
+            wraplength=METRIC_TEXT_WRAP,
+            justify="left",
+        )
+        title_lbl.pack(anchor="w", fill="x")
+
+        value_lbl = ctk.CTkLabel(
+            text_col,
+            text="—",
+            font=ctk.CTkFont(family="Segoe UI", size=15, weight="bold"),
+            text_color="#ecfdf5",
+            anchor="w",
+            wraplength=METRIC_TEXT_WRAP,
+            justify="left",
+        )
+        value_lbl.pack(anchor="w", fill="x", pady=(2, 0))
+
+        sub_lbl = ctk.CTkLabel(
+            text_col,
+            text="",
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color=METRIC_ACCENT,
+            anchor="w",
+            wraplength=METRIC_TEXT_WRAP,
+            justify="left",
+        )
+        sub_lbl.pack(anchor="w", fill="x", pady=(2, 0))
+
+        card.pack_forget()
+        return _MetricCardUi(wrap=wrap, card=card, emoji=emoji, title=title_lbl, value=value_lbl, sub=sub_lbl)
+
+    def _on_flop_entry_changed(self, _event: tk.Event | None = None) -> None:
+        self._update_board_metrics()
+        self._schedule_auto_run()
+
+    def _update_board_metrics(self) -> None:
+        flop_s = self._flop_entry.get().strip().replace(" ", "")
+        if len(flop_s) != 6:
+            self._hide_metric_card(self._board_metric_wrap, self._board_metric_card)
+            self._hide_metric_card(self._straight_metric_wrap, self._straight_metric_card)
+            self._hide_metric_card(self._secondary_metric_wrap, self._secondary_metric_card)
+            return
+        try:
+            board_info = classify_flop_text(flop_s)
+            straight_info = straight_risk_from_flop_text(flop_s)
+            secondary_info = secondary_risk_from_flop_text(flop_s)
+        except ValueError:
+            self._hide_metric_card(self._board_metric_wrap, self._board_metric_card)
+            self._hide_metric_card(self._straight_metric_wrap, self._straight_metric_card)
+            self._hide_metric_card(self._secondary_metric_wrap, self._secondary_metric_card)
+            return
+        self._apply_board_metric(board_info)
+        self._apply_straight_metric(straight_info)
+        self._apply_secondary_metric(secondary_info)
+
+    def _show_metric_card(self, wrap: ctk.CTkFrame, card: ctk.CTkFrame) -> None:
+        wrap.grid()
+        if not card.winfo_ismapped():
+            card.pack(fill="both", expand=True)
+
+    def _hide_metric_card(self, wrap: ctk.CTkFrame, card: ctk.CTkFrame) -> None:
+        card.pack_forget()
+        wrap.grid_remove()
+
+    def _apply_board_metric(self, info: FlopHighInfo) -> None:
+        self._board_metric_emoji.configure(text=info.emoji)
+        self._board_metric_value.configure(text=info.label)
+        self._board_metric_sub.configure(text=f"Highest flop card · {info.high_rank}")
+        self._show_metric_card(self._board_metric_wrap, self._board_metric_card)
+
+    def _apply_straight_metric(self, info: StraightRiskInfo) -> None:
+        self._straight_metric_emoji.configure(text=info.emoji)
+        self._straight_metric_value.configure(text=info.label)
+        if info.completions:
+            self._straight_metric_sub.configure(text=info.completions_text)
+        else:
+            self._straight_metric_sub.configure(text="Possible straight")
+        self._show_metric_card(self._straight_metric_wrap, self._straight_metric_card)
+
+    def _apply_secondary_metric(self, info: SecondaryRiskInfo) -> None:
+        if not info.matched:
+            self._hide_metric_card(self._secondary_metric_wrap, self._secondary_metric_card)
+            return
+        self._secondary_metric_emoji.configure(text=info.emoji)
+        self._secondary_metric_value.configure(
+            text=info.label,
+            font=ctk.CTkFont(
+                family="Segoe UI",
+                size=13 if len(info.matches) > 1 else 15,
+                weight="bold",
+            ),
+        )
+        self._secondary_metric_sub.configure(text=info.subtitle)
+        self._show_metric_card(self._secondary_metric_wrap, self._secondary_metric_card)
 
     def _chart_stack_bb(self) -> str:
         return self._chart_stack_var.get()
 
-    def _on_chart_stack_changed(self, _value: str) -> None:
-        positions = list_positions(self._chart_stack_bb()) or ["BB"]
-        self._chart_pos_menu.configure(values=positions)
-        if self._chart_pos_var.get() not in positions:
-            self._chart_pos_var.set(positions[0])
-        self._on_chart_position_changed(self._chart_pos_var.get())
+    def _on_stack_changed(self, _value: str) -> None:
+        seats = self._seat_values()
+        for menu, var in (
+            (self._hero_pos_menu, self._hero_pos_var),
+            (self._villain_pos_menu, self._villain_pos_var),
+        ):
+            menu.configure(values=seats)
+            if var.get() not in seats:
+                var.set(seats[0])
+        self._on_setup_changed()
+
+    def _on_setup_changed(self) -> None:
+        va = self._villain_action_var.get()
+        ha = hero_action_for_villain(va)
+        self._hero_action_label.configure(
+            text=f"Hero action (auto): {ha}   ·   Villain action: {va}  (RFI ↔ Call)"
+        )
+        try:
+            from spot_resolve import resolve_chart
+
+            chart_seat, spot = resolve_chart(
+                self._hero_pos_var.get(),
+                self._villain_pos_var.get(),
+                va,
+                self._chart_stack_bb(),
+            )
+            self._spot_label.configure(
+                text=f"Chart: {self._chart_stack_bb()} / {chart_seat} / {spot}.json"
+            )
+        except ValueError as e:
+            self._spot_label.configure(text=str(e))
+        self._schedule_auto_run()
+
+    def _schedule_auto_run(self) -> None:
+        if self._auto_run_after_id is not None:
+            self.root.after_cancel(self._auto_run_after_id)
+        self._auto_run_after_id = self.root.after(400, self._try_auto_run)
+
+    def _inputs_ready(self) -> bool:
+        hero_s = self._hero_entry.get().strip().replace(" ", "")
+        flop_s = self._flop_entry.get().strip().replace(" ", "")
+        if len(hero_s) != 4 or len(flop_s) != 6:
+            return False
+        if self._hero_pos_var.get() == self._villain_pos_var.get():
+            return False
+        return True
+
+    def _try_auto_run(self) -> None:
+        self._auto_run_after_id = None
+        if self._inputs_ready() and not self._eq_busy:
+            self._on_run_equity()
 
     def _pick_hero_cards(self) -> None:
         open_card_picker(
@@ -226,6 +476,7 @@ class EquityApp:
         self._hero_entry.delete(0, "end")
         self._hero_entry.insert(0, compact)
         self._hero_card_codes = {compact[i : i + 2].lower() for i in range(0, len(compact), 2)}
+        self._schedule_auto_run()
 
     def _hero_blocked_codes(self) -> set[str]:
         text = self._hero_entry.get().strip()
@@ -251,47 +502,15 @@ class EquityApp:
     def _on_board_picked(self, compact: str) -> None:
         self._flop_entry.delete(0, "end")
         self._flop_entry.insert(0, compact)
-
-    def _on_chart_toggle(self) -> None:
-        state = "normal" if self._use_chart_var.get() else "disabled"
-        for w in (
-            self._chart_stack_menu,
-            self._chart_pos_menu,
-            self._chart_spot_menu,
-            self._chart_action_menu,
-        ):
-            w.configure(state=state)
-
-    def _on_chart_position_changed(self, position: str) -> None:
-        spots = list_spots(position, self._chart_stack_bb())
-        if not spots:
-            spots = [""]
-        self._chart_spot_menu.configure(values=spots)
-        self._chart_spot_var.set(spots[0])
-        self._on_chart_spot_changed(spots[0])
-
-    def _on_chart_spot_changed(self, spot: str) -> None:
-        if not spot:
-            self._chart_action_menu.configure(values=[""])
-            self._chart_action_var.set("")
-            return
-        position = self._chart_pos_var.get()
-        acts = list_chart_actions(position, spot, self._chart_stack_bb())
-        if not acts:
-            self._chart_action_menu.configure(values=[""])
-            self._chart_action_var.set("")
-            return
-        suggested = suggest_villain_action(
-            load_strategy(chart_path(position, spot, stack_bb=self._chart_stack_bb())),
-            stack_bb=self._chart_stack_bb(),
-        )
-        default = suggested if suggested in acts else acts[0]
-        self._chart_action_menu.configure(values=acts)
-        self._chart_action_var.set(default)
+        self._update_board_metrics()
+        self._schedule_auto_run()
 
     def _on_run_equity(self) -> None:
         if self._eq_busy:
             return
+        if not self._inputs_ready():
+            return
+
         self._eq_busy = True
         self._run_btn.configure(state="disabled")
         self._eq_progress.configure(text="Running…")
@@ -299,9 +518,11 @@ class EquityApp:
 
         hero_s = self._hero_entry.get().strip()
         flop_s = self._flop_entry.get().strip()
-        range_s = self._range_entry.get().strip()
-        use_chart = self._use_chart_var.get()
+        hero_pos = self._hero_pos_var.get()
+        villain_pos = self._villain_pos_var.get()
+        villain_action = self._villain_action_var.get()
         chart_stack_bb = self._chart_stack_bb()
+
         try:
             n_trials = int(self._trials_entry.get().strip())
         except ValueError:
@@ -312,34 +533,19 @@ class EquityApp:
             try:
                 hero = parse_hero(hero_s)
                 board = parse_board(flop_s)
-                overlap = set(hero) & set(board)
-                if overlap:
+                if set(hero) & set(board):
                     raise ValueError("Hero cards overlap with board")
 
-                combo_weights: list[float] | None = None
-                chart_note = ""
-
-                if use_chart:
-                    pos = self._chart_pos_var.get()
-                    spot = self._chart_spot_var.get()
-                    action = self._chart_action_var.get()
-                    if not spot or not action:
-                        raise ValueError("Select chart position, spot, and action")
-                    villain_combos, combo_weights = villain_range_from_chart(
-                        pos, spot, [action], stack_bb=chart_stack_bb
-                    )
-                    chart_note = f"Chart ({chart_stack_bb}) {pos} / {spot} / {action}\n"
-                    if range_s:
-                        extra = expand_range_string(range_s)
-                        villain_combos = list(set(villain_combos) | set(extra))
-                        combo_weights = None
-                else:
-                    if not range_s:
-                        raise ValueError("Enter villain range text or enable chart range")
-                    villain_combos = expand_range_string(range_s)
-
-                if not villain_combos:
-                    raise ValueError("Villain range is empty")
+                chart_seat, spot, hero_act, villain_combos, combo_weights = villain_range_for_spot(
+                    hero_pos,
+                    villain_pos,
+                    villain_action,
+                    chart_stack_bb,
+                )
+                chart_note = (
+                    f"{chart_stack_bb} / {chart_seat} / {spot}  ·  "
+                    f"Villain {villain_action}  ·  Hero {hero_act}\n"
+                )
 
                 def prog(done: int, total: int) -> None:
                     pct = 100.0 * done / total
@@ -350,13 +556,12 @@ class EquityApp:
                         ),
                     )
 
-                rng = random.Random()
                 result = run_monte_carlo(
                     hero,
                     board,
                     villain_combos,
                     n_trials,
-                    rng,
+                    random.Random(),
                     progress_callback=prog,
                     progress_every=max(1, n_trials // 100),
                     combo_weights=combo_weights,
@@ -368,6 +573,7 @@ class EquityApp:
                 )
                 self.root.after(0, lambda: self._eq_progress.configure(text="Done."))
                 self.root.after(0, lambda t=lines: self._eq_results.configure(text=t))
+                self.root.after(0, self._update_board_metrics)
             except Exception as e:
                 self.root.after(0, lambda msg=str(e): self._eq_finish_error(msg))
             finally:

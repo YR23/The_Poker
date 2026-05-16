@@ -68,7 +68,7 @@ class CardPickerDialog(ctk.CTkToplevel):
         ).pack(anchor="w")
         ctk.CTkLabel(
             header,
-            text="Red ♥ · Black ♠ · Green ♣ · Blue ♦",
+            text="Red ♥ · Black ♠ · Green ♣ · Blue ♦  ·  click a picked card again to deselect",
             font=ctk.CTkFont(size=12),
             text_color=("gray40", "gray60"),
         ).pack(anchor="w", pady=(2, 0))
